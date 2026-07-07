@@ -1,0 +1,805 @@
+<title>agentcity — maya's map, day 94</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ink:#e8e4d8; --ink-dim:#a8a496; --panel:#161425; --panel2:#20203a;
+    --line:#3a3856; --gold:#ffcf7a; --cyan:#7fe3e0; --red:#ff6a5a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:#0c0b18;}
+  body{
+    font-family:"Courier New",ui-monospace,monospace;
+    color:var(--ink); user-select:none; -webkit-user-select:none;
+  }
+  #stage{position:fixed;inset:0;}
+  canvas#world{position:absolute;inset:0;width:100%;height:100%;
+    image-rendering:pixelated;image-rendering:crisp-edges;cursor:grab;display:block;}
+  canvas#world.drag{cursor:grabbing;}
+
+  /* pixel-panel styling */
+  .panel{
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:2px solid var(--line);
+    box-shadow:0 0 0 2px #0c0b18, 0 6px 0 rgba(0,0,0,.35);
+    padding:8px 10px; line-height:1.5; letter-spacing:.4px;
+  }
+  .hud{position:absolute;z-index:5;font-size:12px;}
+  #hudTL{top:12px;left:12px;}
+  #hudTR{top:12px;right:12px;text-align:right;}
+  #hudTL .big{font-size:15px;color:var(--gold);font-weight:bold;letter-spacing:1px;}
+  #hudTL .sub{color:var(--ink-dim);font-size:10px;margin-top:2px;}
+  #hudTR .row{white-space:nowrap;}
+  #hudTR .dot{display:inline-block;width:8px;height:8px;margin-right:5px;vertical-align:middle;}
+  .work{color:var(--cyan);} .wait{color:var(--gold);}
+  .dot.g{background:#7fe3a0;box-shadow:0 0 6px #7fe3a0;}
+  .dot.y{background:var(--gold);box-shadow:0 0 6px var(--gold);}
+
+  #legend{position:absolute;left:12px;bottom:64px;z-index:5;font-size:10px;}
+  #legend h4{font-size:10px;color:var(--ink-dim);letter-spacing:1px;margin-bottom:6px;font-weight:normal;}
+  #legend .li{display:flex;align-items:center;gap:7px;margin:3px 0;}
+  #legend .chip{width:11px;height:11px;border:1px solid rgba(0,0,0,.5);flex:none;}
+
+  #footer{position:absolute;left:0;right:0;bottom:0;z-index:6;
+    background:linear-gradient(180deg,rgba(12,11,24,0),#0c0b18 60%);
+    padding:10px 14px 8px; font-size:11px; color:var(--ink-dim);
+    text-align:center; letter-spacing:1.5px; pointer-events:none;}
+  #footer b{color:var(--gold);font-weight:normal;}
+  #footer span{opacity:.5;padding:0 8px;}
+
+  /* minimap */
+  #mm{position:absolute;right:12px;bottom:60px;z-index:5;padding:6px;}
+  #mm .label{font-size:9px;color:var(--ink-dim);letter-spacing:1px;margin-bottom:4px;text-align:center;}
+  canvas#minimap{display:block;image-rendering:pixelated;cursor:pointer;background:#0a0912;
+    border:1px solid var(--line);}
+
+  /* zoom controls */
+  #zoom{position:absolute;right:12px;top:70px;z-index:5;display:flex;flex-direction:column;gap:4px;}
+  #zoom button{font-family:inherit;font-size:16px;width:30px;height:30px;color:var(--ink);
+    background:var(--panel2);border:2px solid var(--line);cursor:pointer;line-height:1;}
+  #zoom button:hover{background:#2c2c4e;color:var(--gold);}
+
+  /* tooltip */
+  #tip{position:absolute;z-index:9;pointer-events:none;display:none;font-size:11px;
+    min-width:150px;max-width:210px;}
+  #tip .name{color:var(--gold);font-weight:bold;font-size:12px;letter-spacing:.5px;}
+  #tip .dist{color:var(--cyan);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin:2px 0 5px;}
+  #tip .meta{color:var(--ink-dim);font-size:10px;}
+  #tip .meta b{color:var(--ink);font-weight:normal;}
+
+  @media (max-width:640px){
+    #legend{display:none;} #hudTR{font-size:11px;}
+  }
+</style>
+
+<div id="stage">
+  <canvas id="world"></canvas>
+
+  <div id="hudTL" class="hud panel">
+    <div class="big">AGENTCITY</div>
+    <div class="sub">maya's map &middot; day 94</div>
+  </div>
+
+  <div id="hudTR" class="hud panel">
+    <div class="row"><span class="dot g"></span><span class="work">3 agents working</span></div>
+    <div class="row"><span class="dot y"></span><span class="wait">1 waiting on you</span></div>
+  </div>
+
+  <div id="legend" class="hud panel">
+    <h4>DISTRICTS &rarr; WORK</h4>
+    <div class="li"><span class="chip" style="background:#d98a48"></span>code</div>
+    <div class="li"><span class="chip" style="background:#5fb8d6"></span>tests</div>
+    <div class="li"><span class="chip" style="background:#9aa0aa"></span>infra</div>
+    <div class="li"><span class="chip" style="background:#4fc09a"></span>api</div>
+    <div class="li"><span class="chip" style="background:#9a76d6"></span>research</div>
+    <div class="li"><span class="chip" style="background:#5f82d6"></span>planning</div>
+  </div>
+
+  <div id="zoom">
+    <button id="zin" title="zoom in">+</button>
+    <button id="zout" title="zoom out">&minus;</button>
+  </div>
+
+  <div id="mm" class="hud panel">
+    <div class="label">TERRITORY</div>
+    <canvas id="minimap" width="150" height="150"></canvas>
+  </div>
+
+  <div id="tip" class="panel">
+    <div class="name"></div>
+    <div class="dist"></div>
+    <div class="meta"></div>
+  </div>
+
+  <div id="footer">
+    <b>your work builds the map</b><span>&bull;</span>your agent is the architect<span>&bull;</span><b>local-first</b>
+  </div>
+</div>
+
+<script>
+(()=>{
+"use strict";
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+const cv = document.getElementById("world");
+const ctx = cv.getContext("2d");
+const mm = document.getElementById("minimap");
+const mmx = mm.getContext("2d");
+const tip = document.getElementById("tip");
+const tipName = tip.querySelector(".name");
+const tipDist = tip.querySelector(".dist");
+const tipMeta = tip.querySelector(".meta");
+
+// ---- iso constants ----
+const HW = 16, HH = 8;              // half tile width / height (world px)
+const MAP = 40;                     // map dimension in tiles
+const ZOOMS = [2,3,4];
+let zi = 0;                         // zoom index
+let zoom = ZOOMS[zi];
+let W = 0, H = 0, DPR = 1;
+
+// camera = iso-space point kept at screen center
+let camIx = 0, camIy = 312;
+
+// ---- palette helpers ----
+function shade(hex, f){
+  const n = parseInt(hex.slice(1),16);
+  let r=(n>>16)&255, g=(n>>8)&255, b=n&255;
+  r=Math.min(255,Math.max(0,Math.round(r*f)));
+  g=Math.min(255,Math.max(0,Math.round(g*f)));
+  b=Math.min(255,Math.max(0,Math.round(b*f)));
+  return "rgb("+r+","+g+","+b+")";
+}
+
+// work-type -> base color + legend
+const WORK = {
+  code:     "#d98a48",
+  tests:    "#5fb8d6",
+  infra:    "#9aa0aa",
+  api:      "#4fc09a",
+  research: "#9a76d6",
+  planning: "#5f82d6",
+  oldtown:  "#b56a44",
+};
+
+// ---- coordinate transforms ----
+function gridIso(gx,gy){ return { x:(gx-gy)*HW, y:(gx+gy)*HH }; }
+function tileCenterIso(tx,ty){ return { x:(tx-ty)*HW, y:(tx+ty+1)*HH }; }
+function isoToScreen(ix,iy){
+  return { x:Math.round((ix-camIx)*zoom + W/2), y:Math.round((iy-camIy)*zoom + H/2) };
+}
+function screenToTile(sx,sy){
+  const ix=(sx - W/2)/zoom + camIx;
+  const iy=(sy - H/2)/zoom + camIy;
+  const a=ix/HW, b=iy/HH - 1;
+  return { tx:(a+b)/2, ty:(b-a)/2 };
+}
+
+// =====================================================================
+//  WORLD GENERATION
+// =====================================================================
+const CX = 19, CY = 19;             // Old Town center
+const ground = [];                  // ground[y][x] = {t, elev}
+const heightAt = (x,y)=> (ground[y] && ground[y][x]) ? ground[y][x].elev : 0;
+
+function inMap(x,y){ return x>=0&&y>=0&&x<MAP&&y<MAP; }
+
+// base terrain
+for(let y=0;y<MAP;y++){
+  ground[y]=[];
+  for(let x=0;x<MAP;x++){
+    const dx=x-CX, dy=y-CY;
+    const r=Math.sqrt(dx*dx+dy*dy);
+    let t="grass";
+    if(x+y>=57) t="water";                // SE sea
+    else if(r>15.5 || x<5||x>35||y<5||y>35) t="fog"; // unexplored
+    else if(((x+y)&1)===0) t="grass2";    // subtle checker
+    ground[y][x]={t, elev:0};
+  }
+}
+// shore sand: land adjacent to water
+for(let y=0;y<MAP;y++)for(let x=0;x<MAP;x++){
+  const c=ground[y][x];
+  if(c.t==="water"||c.t==="fog") continue;
+  let near=false;
+  for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]){
+    if(inMap(x+ox,y+oy)&&ground[y+oy][x+ox].t==="water") near=true;
+  }
+  if(near) c.t="sand";
+}
+// hill for library / observatory (NW)
+function raise(x0,y0,x1,y1,e){
+  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)
+    if(inMap(x,y)&&ground[y][x].t!=="water"){ ground[y][x].elev=e; if(ground[y][x].t==="grass2") ground[y][x].t="grass"; }
+}
+raise(9,9,13,13,7);
+// gentle skirt ring around hill so it reads as elevated
+raise(8,8,8,14,3); raise(14,8,14,14,3); raise(9,8,13,8,3); raise(9,14,13,14,3);
+
+// roads (straight H/V segments)
+function road(x0,y0,x1,y1){
+  const sx=Math.sign(x1-x0)||0, sy=Math.sign(y1-y0)||0;
+  let x=x0,y=y0;
+  while(true){
+    if(inMap(x,y)&&ground[y][x].t!=="water"&&ground[y][x].t!=="fog") ground[y][x].t="road";
+    if(x===x1&&y===y1) break;
+    if(x!==x1) x+=sx; else y+=sy;
+  }
+}
+road(19,19,19,14); road(19,14,14,14);      // -> test towers
+road(19,14,19,11); road(19,11,15,11);      // -> city hall
+road(15,11,11,11);                          // -> library hill
+road(19,19,27,19); road(27,19,27,27);      // -> docks / harbor
+road(19,14,30,14); road(30,14,30,10);      // -> construction edge
+road(19,19,19,24); road(19,24,16,24);      // -> ruin
+road(27,27,29,27); road(29,27,29,29);      // -> harbor front / bridge
+
+// plaza stone around old town
+for(let y=18;y<=20;y++)for(let x=18;x<=20;x++)
+  if(inMap(x,y)&&ground[y][x].t!=="road") ground[y][x].t="stone";
+
+// =====================================================================
+//  OBJECTS (buildings + props)  — depth sorted, painter back-to-front
+// =====================================================================
+const objs = [];
+let seedc=1;
+const rnd = ()=>{ seedc=(seedc*1103515245+12345)&0x7fffffff; return seedc/0x7fffffff; };
+
+function building(o){
+  o.kind="building";
+  o.depth = (o.tx+ (o.fw||1)-1) + (o.ty+(o.fd||1)-1);
+  o.elev = heightAt(o.tx,o.ty);
+  o.fw=o.fw||1; o.fd=o.fd||1;
+  o.seed = Math.floor(rnd()*1000);
+  objs.push(o);
+  return o;
+}
+function prop(o){ o.kind=o.kind||"prop"; o.depth=o.tx+o.ty; o.elev=heightAt(o.tx,o.ty); objs.push(o); return o; }
+
+// --- OLD TOWN (weathered warm mid-rise) ---
+building({tx:17,ty:17,fw:2,fd:2,h:58,work:"oldtown",name:"core-app",dist:"OLD TOWN",floors:14,last:"3h ago",weather:1,lit:1});
+building({tx:20,ty:17,fw:1,fd:1,h:42,work:"oldtown",name:"legacy-cli",dist:"OLD TOWN",floors:9,last:"6d ago",weather:1});
+building({tx:17,ty:20,fw:1,fd:1,h:46,work:"code",name:"monorepo",dist:"OLD TOWN",floors:11,last:"1d ago",lit:1});
+building({tx:20,ty:20,fw:1,fd:1,h:36,work:"code",name:"utils-lib",dist:"OLD TOWN",floors:7,last:"2d ago"});
+// clocktower + statue
+building({tx:19,ty:19,fw:1,fd:1,h:96,work:"oldtown",name:"clock-tower",dist:"OLD TOWN",floors:1,last:"—",tower:1,weather:1,lit:1});
+prop({tx:18,ty:18,type:"statue"});
+
+// --- CITY HALL / planning (blueprint boards) ---
+building({tx:14,ty:16,fw:2,fd:2,h:40,work:"planning",name:"roadmap-hall",dist:"CITY HALL",floors:8,last:"4h ago",lit:1,boards:1});
+prop({tx:16,ty:15,type:"board"});
+prop({tx:14,ty:18,type:"board"});
+
+// --- GLASS TEST TOWERS (cyan tops) ---
+building({tx:12,ty:14,fw:1,fd:1,h:78,work:"tests",name:"e2e-suite",dist:"TEST TOWERS",floors:19,last:"1h ago",glass:1,lit:1,beacon:1});
+building({tx:14,ty:12,fw:1,fd:1,h:66,work:"tests",name:"unit-runner",dist:"TEST TOWERS",floors:16,last:"1h ago",glass:1,lit:1});
+building({tx:11,ty:12,fw:1,fd:1,h:54,work:"tests",name:"coverage",dist:"TEST TOWERS",floors:13,last:"9h ago",glass:1});
+
+// --- LIBRARY + OBSERVATORY on hill (research) ---
+building({tx:10,ty:10,fw:2,fd:2,h:34,work:"research",name:"docs-archive",dist:"RESEARCH HILL",floors:6,last:"2d ago",lit:1});
+building({tx:12,ty:11,fw:1,fd:1,h:30,work:"research",name:"observatory",dist:"RESEARCH HILL",floors:5,last:"5d ago",dome:1});
+
+// --- INDUSTRIAL DOCKS (infra, smokestacks) by water ---
+building({tx:26,ty:26,fw:2,fd:1,h:34,work:"infra",name:"ci-foundry",dist:"INDUSTRY",floors:5,last:"20m ago",stack:1,lit:1});
+building({tx:26,ty:24,fw:1,fd:1,h:40,work:"infra",name:"build-cache",dist:"INDUSTRY",floors:7,last:"20m ago",stack:1,lit:1});
+building({tx:28,ty:25,fw:1,fd:1,h:26,work:"infra",name:"registry",dist:"INDUSTRY",floors:4,last:"1d ago"});
+prop({tx:25,ty:27,type:"crates"});
+prop({tx:27,ty:27,type:"crates"});
+
+// --- HARBOR + LIGHTHOUSE + BRIDGE (api) ---
+building({tx:27,ty:29,fw:1,fd:1,h:30,work:"api",name:"gateway",dist:"HARBOR",floors:5,last:"40m ago",lit:1});
+building({tx:29,ty:28,fw:1,fd:1,h:24,work:"api",name:"webhook-pier",dist:"HARBOR",floors:3,last:"3d ago"});
+prop({tx:30,ty:30,type:"lighthouse"});
+prop({tx:29,ty:30,type:"bridge"});
+
+// --- RUIN (decayed, vine-cracked) ---
+building({tx:15,ty:24,fw:1,fd:1,h:30,work:"code",name:"v1-legacy",dist:"RUINS",floors:5,last:"71d ago",ruin:1});
+
+// --- CONSTRUCTION SITE (growing edge) ---
+prop({tx:30,ty:10,type:"construction"});
+building({tx:31,ty:11,fw:1,fd:1,h:18,work:"code",name:"payments-svc",dist:"NEW DISTRICT",floors:3,last:"active now",scaffold:1,lit:1});
+prop({tx:29,ty:11,type:"dirt"});
+prop({tx:31,ty:10,type:"dirt"});
+
+// --- survey stakes in the fog (undiscovered) ---
+prop({tx:6,ty:20,type:"stake"}); prop({tx:22,ty:6,type:"stake"});
+prop({tx:34,ty:20,type:"stake"}); prop({tx:9,ty:33,type:"stake"});
+prop({tx:33,ty:33,type:"stake"});
+
+// --- a few trees for charm ---
+[[23,13],[24,22],[13,22],[22,16],[10,17],[16,13]].forEach(([x,y])=>{
+  if(inMap(x,y)&&ground[y][x].t==="grass"||ground[y]&&ground[y][x]&&(ground[y][x].t==="grass2")) prop({tx:x,ty:y,type:"tree"});
+});
+
+objs.sort((a,b)=>a.depth-b.depth);
+
+// --- workers (tiny iso figures on roads) ---
+const workers = [
+  { path:[[19,19],[20,19],[21,19],[22,19],[23,19]], t:0, dir:1, sp:0.010, col:"#ffd27a" },
+  { path:[[26,26],[27,26],[27,25],[27,24]], t:0, dir:1, sp:0.008, col:"#7fe3e0" },
+];
+
+// =====================================================================
+//  DRAWING PRIMITIVES
+// =====================================================================
+function poly(pts, fill, stroke){
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.closePath();
+  if(fill){ ctx.fillStyle=fill; ctx.fill(); }
+  if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=1; ctx.stroke(); }
+}
+
+// ground tile diamond (with optional elevation skirt)
+const GROUND_COL = {
+  grass:  "#3c6b3a", grass2: "#356336",
+  road:   "#4a4740", water:  "#2b567e", sand: "#b9a468",
+  stone:  "#6b6660", fog:    "#181a26",
+};
+function drawTile(tx,ty){
+  const c=ground[ty][tx];
+  const e=c.elev;
+  const T=gridIso(tx,ty),  R=gridIso(tx+1,ty), B=gridIso(tx+1,ty+1), L=gridIso(tx,ty+1);
+  const top = [T,R,B,L].map(p=>isoToScreen(p.x,p.y-e));
+  let col = GROUND_COL[c.t]||"#333";
+
+  // elevation skirt (dirt cliff)
+  if(e>0){
+    const Lg=isoToScreen(L.x,L.y), Bg=isoToScreen(B.x,B.y), Rg=isoToScreen(R.x,R.y);
+    poly([top[3],top[2],Bg,Lg], "#5a4632");           // left cliff
+    poly([top[2],top[1],Rg,Bg], "#443422");           // right cliff
+  }
+  poly(top, col);
+
+  // detailing
+  if(c.t==="road"){
+    // faint center marks
+    const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2;
+    ctx.fillStyle="#5c5850"; ctx.fillRect(cx-1*zoom,cy-1,2*zoom,2);
+  } else if(c.t==="water"){
+    // shimmer line (animated)
+    const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2;
+    const ph = REDUCE?0:Math.sin((tx*1.7+ty*2.3)+now*0.0015);
+    ctx.fillStyle = ph>0.3? "#3f6f9c":"#265073";
+    ctx.fillRect(cx-4*zoom, cy-1, 8*zoom, 2);
+  } else if(c.t==="stone"){
+    ctx.fillStyle="rgba(0,0,0,.12)";
+    ctx.fillRect((top[0].x+top[2].x)/2-1, (top[0].y+top[2].y)/2-1,2,2);
+  } else if(c.t==="fog"){
+    // darkening + occasional grain
+    poly(top, "rgba(4,4,10,.35)");
+  }
+}
+
+// generic iso box: footprint tiles, height h(world px). returns geometry for hit-test
+function boxGeom(o){
+  const e=o.elev;
+  const T=gridIso(o.tx, o.ty);
+  const R=gridIso(o.tx+o.fw, o.ty);
+  const B=gridIso(o.tx+o.fw, o.ty+o.fd);
+  const L=gridIso(o.tx, o.ty+o.fd);
+  const gT=isoToScreen(T.x,T.y-e), gR=isoToScreen(R.x,R.y-e),
+        gB=isoToScreen(B.x,B.y-e), gL=isoToScreen(L.x,L.y-e);
+  const h=o.h*zoom;
+  const tT={x:gT.x,y:gT.y-h}, tR={x:gR.x,y:gR.y-h},
+        tB={x:gB.x,y:gB.y-h}, tL={x:gL.x,y:gL.y-h};
+  return {gT,gR,gB,gL,tT,tR,tB,tL,
+    top:[tT,tR,tB,tL], left:[gL,gB,tB,tL], right:[gB,gR,tR,tB]};
+}
+
+// draw windows on a face defined by ground corners A,B and up height h(screen px)
+function faceWindows(A,B,h,cols,rows,litFn,litCol,offCol){
+  const dx=(B.x-A.x), dy=(B.y-A.y);
+  const mx=0.12, my=0.10;          // margins in u/v
+  const gw=(1-2*mx)/cols, gh=(1-2*my)/rows;
+  const ww=gw*0.62, wh=gh*0.6;
+  for(let r=0;r<rows;r++){
+    for(let c=0;c<cols;c++){
+      const u0=mx + c*gw + (gw-ww)/2;
+      const v0=my + r*gh + (gh-wh)/2;
+      const on=litFn(c,r);
+      const p=(u,v)=>({ x:A.x+dx*u, y:A.y+dy*u - h*v });
+      poly([p(u0,v0),p(u0+ww,v0),p(u0+ww,v0+wh),p(u0,v0+wh)], on?litCol:offCol);
+    }
+  }
+}
+
+function drawBuilding(o){
+  const g=boxGeom(o);
+  const base=WORK[o.work];
+  let topC, rightC, leftC;
+  if(o.glass){ topC=shade(base,1.55); rightC=shade(base,1.0); leftC=shade(base,0.62); }
+  else if(o.ruin){ const gy="#6d6a5c"; topC=shade("#4a4636",1.25); rightC="#575344"; leftC="#3c3a2e"; }
+  else { topC=shade(base,1.35); rightC=shade(base,0.95); leftC=shade(base,0.6); }
+
+  const h=o.h*zoom;
+  // faces (left = darker, right = medium)
+  poly(g.left, leftC, "rgba(0,0,0,.35)");
+  poly(g.right, rightC, "rgba(0,0,0,.25)");
+  poly(g.top, topC, "rgba(0,0,0,.2)");
+
+  // windows (skip tiny towers/scaffold/ruin patterns differ)
+  const litCol="#ffcf7a", offCol=shade(base,0.42);
+  const cols=Math.max(1,o.fw*2), rows=Math.max(2,Math.floor(o.h/12));
+  const litFn=(c,r)=>{
+    if(o.ruin) return false;
+    let base = ((c*3 + r*5 + o.seed) % 5) < (o.lit?3:2);
+    if(o.lit && animate){
+      const f=Math.sin(now*0.004 + c*1.3 + r*0.7 + o.seed);
+      if(f>0.6) base=!base;
+    }
+    return base;
+  };
+  faceWindows(g.gL,g.gB,h,cols,rows,litFn,litCol,offCol);
+  faceWindows(g.gB,g.gR,h,cols,rows,(c,r)=>litFn(c+7,r),litCol,offCol);
+
+  // roof details
+  if(o.tower){
+    // clock face + spire
+    const cx=(g.tT.x+g.tB.x)/2, cy=(g.tT.y+g.tB.y)/2;
+    ctx.fillStyle="#f4e3b8"; ctx.fillRect(cx-3*zoom,cy-2*zoom,6*zoom,5*zoom);
+    ctx.fillStyle="#2a2620"; ctx.fillRect(cx-1,cy,2,3*zoom*0.5-1);
+    ctx.fillStyle="#7a3320"; poly([{x:cx,y:cy-8*zoom},{x:g.tR.x,y:g.tR.y},{x:g.tB.x,y:g.tB.y},{x:g.tL.x,y:g.tL.y}], "#7a3320");
+  }
+  if(o.dome){
+    const cx=(g.tT.x+g.tB.x)/2, cy=(g.tT.y+g.tB.y)/2;
+    ctx.fillStyle=shade("#9a76d6",1.3);
+    ctx.beginPath(); ctx.arc(cx,cy, 6*zoom, Math.PI, 0); ctx.fill();
+    ctx.fillStyle="#e0d0ff"; ctx.fillRect(cx-1, cy-6*zoom, 2, 4*zoom);
+  }
+  if(o.glass){
+    // bright cyan cap glow
+    poly(g.top, "rgba(127,227,224,.18)");
+  }
+  if(o.boards){
+    const cx=(g.tT.x+g.tB.x)/2, cy=(g.tT.y+g.tB.y)/2;
+    ctx.fillStyle="#2f5fa0"; ctx.fillRect(cx-4*zoom,cy-2*zoom,3*zoom,3*zoom);
+    ctx.fillStyle="#dfe8ff"; ctx.fillRect(cx-3.5*zoom,cy-1.5*zoom,0.8*zoom,2*zoom);
+  }
+  if(o.scaffold){
+    // scaffolding lines over the small building
+    ctx.strokeStyle="#caa24a"; ctx.lineWidth=1;
+    ctx.strokeRect(g.tL.x, g.tT.y, (g.tR.x-g.tL.x), (g.gB.y-g.tT.y));
+  }
+  if(o.ruin){
+    // vines: green flecks down the faces
+    ctx.fillStyle="#3f7a3a";
+    for(let i=0;i<10;i++){
+      const u=(o.seed*7+i*13)%100/100, v=(i*17)%100/100;
+      const A=g.gL,B=g.gB;
+      ctx.fillRect(A.x+(B.x-A.x)*u, A.y+(B.y-A.y)*u - h*v, 2, 3);
+    }
+    // broken top (notch)
+    ctx.fillStyle="rgba(0,0,0,.4)"; ctx.fillRect((g.tT.x+g.tB.x)/2, g.tT.y, 3*zoom, 3*zoom);
+  }
+  if(o.stack){
+    // smokestack on roof
+    const cx=(g.tT.x+g.tR.x)/2, cy=(g.tT.y+g.tR.y)/2;
+    ctx.fillStyle="#5a5650"; ctx.fillRect(cx-1.5*zoom, cy-8*zoom, 3*zoom, 9*zoom);
+    ctx.fillStyle="#8a3a2a"; ctx.fillRect(cx-1.5*zoom, cy-9*zoom, 3*zoom, 1.5*zoom);
+    o._smoke={x:cx, y:cy-9*zoom};
+  }
+  if(o.beacon){
+    o._beacon={x:(g.tT.x+g.tB.x)/2, y:(g.tT.y+g.tB.y)/2 - 2*zoom};
+  }
+  return g;
+}
+
+function drawProp(o){
+  const c=tileCenterIso(o.tx,o.ty);
+  const s=isoToScreen(c.x, c.y - o.elev);
+  const x=s.x, y=s.y, z=zoom;
+  switch(o.type){
+    case "statue":{
+      ctx.fillStyle="#6b6660"; ctx.fillRect(x-3*z,y-2*z,6*z,3*z);       // pedestal
+      ctx.fillStyle="#9a9488"; ctx.fillRect(x-1.5*z,y-9*z,3*z,7*z);     // figure
+      ctx.fillStyle="#b6b0a2"; ctx.fillRect(x-1.5*z,y-11*z,3*z,2*z);    // head
+      break; }
+    case "board":{
+      ctx.fillStyle="#5a4a32"; ctx.fillRect(x-0.6*z,y-6*z,1.2*z,6*z);
+      ctx.fillStyle="#2f5fa0"; ctx.fillRect(x-4*z,y-11*z,8*z,6*z);
+      ctx.strokeStyle="#dfe8ff"; ctx.lineWidth=1;
+      ctx.strokeRect(x-3*z,y-10*z,6*z,4*z);
+      ctx.beginPath(); ctx.moveTo(x-3*z,y-8*z); ctx.lineTo(x+3*z,y-9.5*z); ctx.stroke();
+      break; }
+    case "tree":{
+      ctx.fillStyle="#5a3d24"; ctx.fillRect(x-1*z,y-4*z,2*z,4*z);
+      ctx.fillStyle="#2f5e30"; ctx.beginPath(); ctx.arc(x,y-6*z,4*z,0,7); ctx.fill();
+      ctx.fillStyle="#3c7040"; ctx.beginPath(); ctx.arc(x-1*z,y-7*z,2.4*z,0,7); ctx.fill();
+      break; }
+    case "crates":{
+      ctx.fillStyle="#8a6a3a"; ctx.fillRect(x-4*z,y-4*z,4*z,4*z);
+      ctx.fillStyle="#9a7a4a"; ctx.fillRect(x*1,y-6*z,4*z,4*z);
+      ctx.strokeStyle="rgba(0,0,0,.3)"; ctx.strokeRect(x-4*z,y-4*z,4*z,4*z);
+      break; }
+    case "lighthouse":{
+      ctx.fillStyle="#d8d2c4"; ctx.fillRect(x-2.5*z,y-14*z,5*z,14*z);
+      ctx.fillStyle="#c0402f"; ctx.fillRect(x-2.5*z,y-11*z,5*z,2*z);
+      ctx.fillRect(x-2.5*z,y-5*z,5*z,2*z);
+      ctx.fillStyle=animate?("rgba(255,225,120,"+(0.4+0.5*Math.abs(Math.sin(now*0.003)))+")"):"#ffe178";
+      ctx.fillRect(x-3*z,y-17*z,6*z,3*z);
+      break; }
+    case "bridge":{
+      ctx.strokeStyle="#7a6a52"; ctx.lineWidth=2*z;
+      ctx.beginPath(); ctx.moveTo(x-HW*z,y); ctx.lineTo(x+HW*z,y-HH*z); ctx.stroke();
+      ctx.fillStyle="#8a7a62";
+      ctx.fillRect(x-HW*z, y-2*z, 2*z,2*z); ctx.fillRect(x+HW*z-2*z, y-HH*z, 2*z,2*z);
+      break; }
+    case "construction":{
+      // crane: mast + arm + hook
+      ctx.strokeStyle="#e0b03a"; ctx.lineWidth=1.5*z;
+      ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x,y-22*z); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x-2*z,y-22*z); ctx.lineTo(x+12*z,y-19*z); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x+9*z,y-19.5*z); ctx.lineTo(x+9*z,y-13*z); ctx.stroke();
+      ctx.fillStyle="#e0b03a"; ctx.fillRect(x+8*z,y-13*z,2*z,2*z);
+      // scaffold frame
+      ctx.strokeStyle="#caa24a"; ctx.lineWidth=1;
+      ctx.strokeRect(x-6*z,y-12*z,10*z,12*z);
+      break; }
+    case "dirt":{ /* ground handled below via marker */ break; }
+    case "stake":{
+      ctx.fillStyle="#4a4632"; ctx.fillRect(x-0.6*z,y-6*z,1.2*z,6*z);
+      ctx.fillStyle="#c9b26a"; ctx.fillRect(x-2.5*z,y-10*z,5*z,4*z);
+      ctx.fillStyle="#1a1a26"; ctx.font=(4.5*z)+"px monospace"; ctx.textAlign="center";
+      ctx.fillText("?", x, y-6.5*z); ctx.textAlign="left";
+      break; }
+  }
+}
+
+// dirt patch marker (drawn in ground pass)
+function isDirt(x,y){
+  return objs.some(o=>o.type==="dirt"&&o.tx===x&&o.ty===y) ||
+         objs.some(o=>o.type==="construction"&&o.tx===x&&o.ty===y);
+}
+
+function drawWorker(w){
+  const p0=w.path[Math.floor(w.seg)], p1=w.path[Math.min(w.path.length-1,Math.floor(w.seg)+1)];
+  const f=w.seg-Math.floor(w.seg);
+  const tx=p0[0]+(p1[0]-p0[0])*f, ty=p0[1]+(p1[1]-p0[1])*f;
+  const c=tileCenterIso(tx,ty); const s=isoToScreen(c.x,c.y-heightAt(Math.round(tx),Math.round(ty)));
+  const z=zoom;
+  ctx.fillStyle="rgba(0,0,0,.25)"; ctx.beginPath(); ctx.ellipse(s.x,s.y,3*z,1.4*z,0,0,7); ctx.fill();
+  ctx.fillStyle=w.col; ctx.fillRect(s.x-1*z, s.y-6*z, 2*z, 4*z);
+  ctx.fillStyle="#f0d8b0"; ctx.fillRect(s.x-1*z, s.y-8*z, 2*z, 2*z);
+}
+
+function drawSmoke(pt, seed){
+  if(!animate) return;
+  for(let i=0;i<5;i++){
+    const t=((now*0.00035)+ i/5 + seed*0.13)%1;
+    const a=(1-t)*0.5;
+    const wob=Math.sin(now*0.002 + i)*3*zoom*t;
+    const sz=(1.5+t*3)*zoom;
+    ctx.fillStyle="rgba(180,180,190,"+a.toFixed(3)+")";
+    ctx.fillRect(pt.x+wob-sz/2, pt.y - t*34*zoom, sz, sz);
+  }
+}
+function drawBeacon(pt){
+  const pulse = animate ? (0.4+0.6*Math.abs(Math.sin(now*0.005))) : 0.9;
+  ctx.fillStyle="rgba(255,80,60,"+(pulse*0.4).toFixed(3)+")";
+  ctx.beginPath(); ctx.arc(pt.x,pt.y,6*zoom,0,7); ctx.fill();
+  ctx.fillStyle="rgba(255,90,70,"+pulse.toFixed(3)+")";
+  ctx.fillRect(pt.x-1.5*zoom, pt.y-1.5*zoom, 3*zoom, 3*zoom);
+}
+
+// =====================================================================
+//  MAIN RENDER
+// =====================================================================
+let now=0, animate=!REDUCE;
+
+function skyBg(){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,"#151330"); g.addColorStop(0.55,"#2a2144");
+  g.addColorStop(0.8,"#4a2f45"); g.addColorStop(1,"#5a3846");
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+  // a few stars up top
+  ctx.fillStyle="rgba(255,255,255,.5)";
+  for(let i=0;i<40;i++){ ctx.fillRect((i*97%W),(i*53%(H*0.35)),1,1); }
+}
+
+function render(){
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  ctx.imageSmoothingEnabled=false;
+  skyBg();
+
+  // culling bounds in tile space (rough)
+  // ground pass — back to front by (x+y)
+  const smokes=[], beacons=[];
+  for(let s=0;s<2*MAP;s++){
+    for(let x=Math.max(0,s-MAP+1); x<=Math.min(MAP-1,s); x++){
+      const y=s-x; if(y<0||y>=MAP) continue;
+      // quick screen cull
+      const c=tileCenterIso(x,y); const sc=isoToScreen(c.x,c.y);
+      if(sc.x< -80 || sc.x>W+80 || sc.y<-120 || sc.y>H+120) continue;
+      drawTile(x,y);
+      if(isDirt(x,y)){
+        const T=gridIso(x,y),R=gridIso(x+1,y),B=gridIso(x+1,y+1),L=gridIso(x,y+1);
+        poly([T,R,B,L].map(p=>isoToScreen(p.x,p.y)), "#6a5232");
+      }
+    }
+  }
+
+  // object pass — back to front (already sorted)
+  for(const o of objs){
+    const c=tileCenterIso(o.tx,o.ty); const sc=isoToScreen(c.x,c.y);
+    if(sc.x< -160 || sc.x>W+160 || sc.y<-260 || sc.y>H+160) { o._smoke=o._beacon=null; continue; }
+    if(o.kind==="building"){ const g=drawBuilding(o); if(o._smoke) smokes.push([o._smoke,o.seed]); if(o._beacon) beacons.push(o._beacon); }
+    else drawProp(o);
+  }
+
+  // workers (above buildings on their tile — draw after nearby buildings; simple top pass)
+  for(const w of workers) drawWorker(w);
+
+  // FX layer
+  for(const [pt,sd] of smokes) drawSmoke(pt,sd);
+  for(const pt of beacons) drawBeacon(pt);
+
+  // vignette for depth
+  const vg=ctx.createRadialGradient(W/2,H/2,H*0.35, W/2,H/2,H*0.9);
+  vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(4,3,12,.55)");
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+
+  drawMinimap();
+}
+
+// =====================================================================
+//  MINIMAP
+// =====================================================================
+const MMCELL = 150/MAP;
+function drawMinimap(){
+  mmx.setTransform(1,0,0,1,0,0);
+  mmx.imageSmoothingEnabled=false;
+  mmx.clearRect(0,0,150,150);
+  for(let y=0;y<MAP;y++)for(let x=0;x<MAP;x++){
+    mmx.fillStyle=GROUND_COL[ground[y][x].t]||"#222";
+    mmx.fillRect(x*MMCELL,y*MMCELL,MMCELL+0.5,MMCELL+0.5);
+  }
+  // buildings as bright chips
+  for(const o of objs){
+    if(o.kind!=="building") continue;
+    mmx.fillStyle=shade(WORK[o.work],1.4);
+    mmx.fillRect(o.tx*MMCELL, o.ty*MMCELL, MMCELL*o.fw, MMCELL*o.fd);
+  }
+  // viewport quad
+  const cs=[[0,0],[W,0],[W,H],[0,H]].map(([sx,sy])=>{
+    const t=screenToTile(sx,sy); return [t.tx*MMCELL, t.ty*MMCELL];
+  });
+  mmx.strokeStyle="#ffcf7a"; mmx.lineWidth=1.5;
+  mmx.beginPath(); mmx.moveTo(cs[0][0],cs[0][1]);
+  for(let i=1;i<4;i++) mmx.lineTo(cs[i][0],cs[i][1]);
+  mmx.closePath(); mmx.stroke();
+  mmx.fillStyle="rgba(255,207,122,.08)"; mmx.fill();
+}
+
+// =====================================================================
+//  CAMERA / INPUT
+// =====================================================================
+function clampCam(){
+  const minIx=-MAP*HW, maxIx=MAP*HW;
+  const minIy=-90, maxIy=(2*MAP)*HH+20;
+  const m=160;
+  camIx=Math.min(maxIx+m, Math.max(minIx-m, camIx));
+  camIy=Math.min(maxIy+m, Math.max(minIy-m, camIy));
+}
+function setZoom(dir, cx, cy){
+  const old=zoom;
+  zi=Math.min(ZOOMS.length-1, Math.max(0, zi+dir));
+  zoom=ZOOMS[zi];
+  if(zoom!==old && cx!=null){
+    // zoom toward cursor: keep world point under cursor fixed
+    const wx=(cx-W/2)/old + camIx, wy=(cy-H/2)/old + camIy;
+    camIx = wx - (cx-W/2)/zoom;
+    camIy = wy - (cy-H/2)/zoom;
+  }
+  clampCam(); dirty=true;
+}
+
+let dragging=false, lastX=0, lastY=0, moved=0;
+cv.addEventListener("pointerdown",e=>{
+  dragging=true; moved=0; lastX=e.clientX; lastY=e.clientY;
+  cv.classList.add("drag"); cv.setPointerCapture(e.pointerId);
+  hideTip();
+});
+cv.addEventListener("pointermove",e=>{
+  if(dragging){
+    const dx=e.clientX-lastX, dy=e.clientY-lastY;
+    moved+=Math.abs(dx)+Math.abs(dy);
+    camIx-=dx/zoom; camIy-=dy/zoom; lastX=e.clientX; lastY=e.clientY;
+    clampCam(); dirty=true;
+  } else {
+    hover(e.clientX, e.clientY);
+  }
+});
+function endDrag(e){ dragging=false; cv.classList.remove("drag"); }
+cv.addEventListener("pointerup",endDrag);
+cv.addEventListener("pointercancel",endDrag);
+cv.addEventListener("pointerleave",()=>{ if(!dragging) hideTip(); });
+
+cv.addEventListener("wheel",e=>{
+  e.preventDefault();
+  setZoom(e.deltaY<0?1:-1, e.clientX, e.clientY);
+},{passive:false});
+
+document.getElementById("zin").onclick=()=>setZoom(1, W/2, H/2);
+document.getElementById("zout").onclick=()=>setZoom(-1, W/2, H/2);
+
+// minimap click-to-jump
+mm.addEventListener("pointerdown",e=>{
+  const r=mm.getBoundingClientRect();
+  const tx=(e.clientX-r.left)/MMCELL, ty=(e.clientY-r.top)/MMCELL;
+  const c=tileCenterIso(tx,ty); camIx=c.x; camIy=c.y; clampCam(); dirty=true;
+});
+
+// =====================================================================
+//  HOVER / TOOLTIP  (hit-test buildings, front-to-back)
+// =====================================================================
+function pointInPoly(px,py,pts){
+  let inside=false;
+  for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+    const xi=pts[i].x, yi=pts[i].y, xj=pts[j].x, yj=pts[j].y;
+    if(((yi>py)!==(yj>py)) && (px < (xj-xi)*(py-yi)/(yj-yi)+xi)) inside=!inside;
+  }
+  return inside;
+}
+const DIST_NAME = {code:"CODE",tests:"TESTS",infra:"INFRA",api:"API",research:"RESEARCH",planning:"PLANNING",oldtown:"CODE"};
+function hover(mx,my){
+  // iterate front-to-back (reverse of paint order)
+  for(let i=objs.length-1;i>=0;i--){
+    const o=objs[i]; if(o.kind!=="building") continue;
+    const g=boxGeom(o);
+    if(pointInPoly(mx,my,g.top)||pointInPoly(mx,my,g.left)||pointInPoly(mx,my,g.right)){
+      showTip(o,mx,my); return;
+    }
+  }
+  hideTip();
+}
+let tipVisible=false;
+function showTip(o,mx,my){
+  tipName.textContent=o.name;
+  tipDist.textContent=o.dist+"  ·  "+DIST_NAME[o.work];
+  tipMeta.innerHTML="floors: <b>"+o.floors+"</b> · last worked: <b>"+o.last+"</b>";
+  tip.style.display="block"; tipVisible=true;
+  let x=mx+16, y=my+14;
+  const w=tip.offsetWidth, h=tip.offsetHeight;
+  if(x+w>W-8) x=mx-w-16; if(y+h>H-8) y=my-h-14;
+  tip.style.left=x+"px"; tip.style.top=y+"px";
+}
+function hideTip(){ if(tipVisible){ tip.style.display="none"; tipVisible=false; } }
+
+// =====================================================================
+//  RESIZE + LOOP
+// =====================================================================
+let dirty=true;
+function resize(){
+  DPR=Math.max(1, Math.min(2, window.devicePixelRatio||1));
+  W=cv.clientWidth; H=cv.clientHeight;
+  cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
+  clampCam(); dirty=true;
+}
+window.addEventListener("resize",resize);
+
+function loop(t){
+  now=t;
+  if(animate){
+    for(const w of workers){
+      w.seg=(w.seg||0)+w.sp*(1);
+      if(w.seg>=w.path.length-1){ w.path.reverse(); w.seg=0; }
+    }
+    render();                     // continuous for animation
+  } else if(dirty){
+    render(); dirty=false;
+  }
+  requestAnimationFrame(loop);
+}
+
+resize();
+// opening framing: start slightly above Old Town for a "tour" feel
+camIx=0; camIy=300; clampCam();
+requestAnimationFrame(loop);
+
+// if reduced motion, still redraw on interaction
+if(REDUCE){
+  ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListener(ev,()=>{dirty=true;}));
+}
+})();
+</script>
