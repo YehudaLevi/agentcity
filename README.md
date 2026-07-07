@@ -23,8 +23,11 @@ This project is gated behind the validation discipline learned the hard way
       see `mockups/`.*
 - [ ] **Gate 3 — metaphor check**: city vs garden decided on evidence
       (scale + taxonomy legibility currently favor city; see plan §4).
-- [ ] **Gate 4 — team-lane confirmation**: broader team-observability sweep
-      (Anthropic native, AgentOps et al.) returns open. *In progress.*
+- [x] **Gate 4 — team-lane**: PASSED 2026-07-07 with conditions. Lane OPEN;
+      "waiting on human" as a team metric exists NOWHERE. Sharks named on
+      the serious end (claude-view, Devin Desktop, Anthropic native — real
+      platform risk); fun-first team surface untouched. Re-verify before M3.
+      Full report: docs/sweep-gate4-team-lane.md
 
 ## The one-paragraph pitch
 
