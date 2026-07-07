@@ -78,6 +78,18 @@ urban categories (industrial vs residential vs civic), (b) org scale
 accumulated collective work — isomorphic, needs no explanation. Garden is
 runner-up for solo-cozy; revisit only if the city mock fails Gate 2.
 
+## 4b. Art direction (decided 2026-07-07, user: "Red Alert map")
+
+**Isometric ever-growing world map**, not a side-view skyline. RTS visual
+grammar (C&C/SimCity 2000): 2:1 diamond tiles, iso buildings (lit top +
+two shaded faces), camera pan/zoom travel (tech transplanted from
+pixelagents' viewport), minimap with click-to-jump, hover tooltips per
+building, fog-of-war at edges = unexplored future work. Why it beats the
+skyline: "ever-growing" needs a sprawling map (skylines have fixed frames);
+"travel there" = the explorer/ownership feel; districts annex outward
+forever. Mock v1 (side-view) kept in mockups/ for the record; v2 (iso) is
+the Gate 2 artifact.
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
