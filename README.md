@@ -18,9 +18,9 @@ This project is gated behind the validation discipline learned the hard way
       installs, ephemeral), AgentPet, AI Town (one-off). Agent-authored
       architecture: nobody. Conditions: positioning must name Git City;
       re-verify neighbor changelogs before build. Full report: docs/sweep-2026-07-07.md
-- [ ] **Gate 2 — the mock feels right**: a static "3 months in" city frame
-      must produce the "I want mine" reaction in <5 seconds. *In progress —
-      see `mockups/`.*
+- [x] **Gate 2 — the mock feels right**: PASSED 2026-07-07 ("go green" —
+      user, after mock v3, the living isometric city). Game rules drafted:
+      docs/game-rules.md.
 - [ ] **Gate 3 — metaphor check**: city vs garden decided on evidence
       (scale + taxonomy legibility currently favor city; see plan §4).
 - [x] **Gate 4 — team-lane**: PASSED 2026-07-07 with conditions. Lane OPEN;
