@@ -90,6 +90,29 @@ skyline: "ever-growing" needs a sprawling map (skylines have fixed frames);
 forever. Mock v1 (side-view) kept in mockups/ for the record; v2 (iso) is
 the Gate 2 artifact.
 
+## 4c. Living-city layer (user direction, 2026-07-07)
+
+- **Population = activity pulse**: every N completed sessions (rolling week)
+  → +1 walking citizen; fork density → dogs/cats accompanying owners;
+  all-nighter → lone citizen under streetlamps. Streets read as the pulse.
+- **Harbor narrative**: new repo founded = ship arrives with a horn +
+  cargo → construction begins at the map edge. Lighthouse blinks for
+  past-midnight sessions.
+- **Rails/bridges** between districts whose repos co-occur in sessions —
+  cross-repo coupling as geography.
+- **Soundscape** (opt-in, off by default): turn.end chime, ship horn,
+  hourly town-clock chimes, gentle waiting-bell. Milestone fireworks.
+- **"The Daily Build"**: daily pixel-newspaper front page (shareable PNG).
+
+## 4d. Content catalog architecture (decided 2026-07-07)
+
+Split: engine + events = LOCAL (nothing outbound, ever — the trust story).
+Content catalog = REMOTE: versioned JSON+sprite packs (building types,
+citizen/pet skins, ornaments, seasonal events) fetched inbound-only with a
+bundled base-pack offline fallback. New types/seasons ship without npm
+releases → live-ops/retention for a local-first tool. Integrity: pin
+catalog versions + checksum (never executable content — data only).
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
