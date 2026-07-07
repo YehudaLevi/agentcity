@@ -113,6 +113,29 @@ bundled base-pack offline fallback. New types/seasons ship without npm
 releases → live-ops/retention for a local-first tool. Integrity: pin
 catalog versions + checksum (never executable content — data only).
 
+## 4e. Game decision + community layer (2026-07-07)
+
+**Decided: the game is exposure + joy + the org story** (not income/daily-
+tool). Two conditions carved in: (1) instant-history compile — first launch
+builds a mature city from existing ~/.claude transcript history (ccusage
+precedent); day-1 empty-plot is a rejected design; (2) retention beyond the
+novelty window is community-fed, not solo live-ops:
+
+- **Community content packs** (privacy-free): catalog accepts community PRs
+  (data-only packs: buildings/citizens/pets/seasons, validated, no code).
+  Converts the live-ops burden into community participation.
+- **Gallery** (opt-in, hosted): explicit "exhibit my city" export — geometry
+  + types + counts only, repo names aliased by default, preview before
+  publish. Kudos/browse. The gallery IS the marketing site. Moderation
+  burden acknowledged.
+- **Seasonal world events** (catalog-pushed): synchronized changes across
+  all cities → synchronized share waves (the Wrapped mechanic).
+- **Sister cities** (serverless social): exchange a token → embassy building
+  in each other's city.
+
+Trust line, verbatim for all materials: "ambient data stays home; you
+choose what to exhibit."
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
