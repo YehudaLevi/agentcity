@@ -12,9 +12,12 @@
 This project is gated behind the validation discipline learned the hard way
 (see `docs/plan.md` §1). Code starts only when all gates pass:
 
-- [ ] **Gate 1 — incumbent sweep**: who is closest to "agent-activity builds
-      a persistent city"? (CodeCity/gource/Skyline family, gamified dev tools,
-      agent-world products). *In progress.*
+- [x] **Gate 1 — incumbent sweep**: PASSED 2026-07-07 with conditions.
+      Verdict: PARTIALLY OCCUPIED, our combo OPEN. Named neighbors: Git City
+      (5.7k*, GitHub-activity pixel city, monetized), pixel-agents (73k
+      installs, ephemeral), AgentPet, AI Town (one-off). Agent-authored
+      architecture: nobody. Conditions: positioning must name Git City;
+      re-verify neighbor changelogs before build. Full report: docs/sweep-2026-07-07.md
 - [ ] **Gate 2 — the mock feels right**: a static "3 months in" city frame
       must produce the "I want mine" reaction in <5 seconds. *In progress —
       see `mockups/`.*
