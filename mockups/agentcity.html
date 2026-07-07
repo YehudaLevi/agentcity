@@ -1,0 +1,493 @@
+<title>agentcity — three months of work</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ink:#e8ecff; --dim:#9aa6d8; --panel:rgba(10,14,34,.62);
+    --line:rgba(140,160,255,.22); --warm:#ffd98a;
+    --font: ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  html,body{margin:0;background:#05070f;color:var(--ink);font-family:var(--font);
+    -webkit-font-smoothing:antialiased;overflow-x:hidden;}
+  .wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;padding:18px 12px 26px;box-sizing:border-box;gap:12px;}
+  .stage{position:relative;width:100%;max-width:1160px;border-radius:10px;overflow:hidden;
+    box-shadow:0 24px 70px rgba(0,0,0,.6),0 0 0 1px rgba(120,140,255,.14),
+      inset 0 0 0 1px rgba(255,255,255,.03);background:#0b1026;line-height:0;}
+  canvas#city{display:block;width:100%;height:auto;image-rendering:pixelated;
+    image-rendering:crisp-edges;}
+  .vignette{position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(120% 90% at 50% 42%,transparent 55%,rgba(0,0,0,.42) 100%);}
+
+  /* HUD */
+  .hud{position:absolute;pointer-events:none;line-height:1.35;}
+  .hud .panel{display:inline-block;background:var(--panel);border:1px solid var(--line);
+    border-radius:6px;padding:7px 10px;backdrop-filter:blur(1px);}
+  .tl{top:12px;left:12px;}
+  .tr{top:12px;right:12px;text-align:right;}
+  .title{font-size:12px;letter-spacing:2px;text-transform:uppercase;color:var(--ink);}
+  .title b{color:#ffe6b0;}
+  .sub{font-size:10px;letter-spacing:1px;color:var(--dim);margin-top:3px;}
+  .agents{font-size:11px;letter-spacing:.5px;color:var(--ink);}
+  .agents .work{color:#8ff0b5;} .agents .wait{color:#ff9a8a;}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;vertical-align:middle;
+    margin-right:5px;transform:translateY(-1px);}
+  .dot.g{background:#57e08a;box-shadow:0 0 7px #57e08a;}
+  .dot.r{background:#ff5a4d;box-shadow:0 0 8px #ff5a4d;animation:pulse 1.6s ease-in-out infinite;}
+  @keyframes pulse{0%,100%{opacity:.55;box-shadow:0 0 4px #ff5a4d;}50%{opacity:1;box-shadow:0 0 12px #ff5a4d;}}
+
+  /* in-scene labels tracked in % of stage */
+  .tag{position:absolute;pointer-events:none;transform:translate(-50%,-50%);
+    font-size:9px;letter-spacing:.6px;text-align:center;white-space:nowrap;}
+  .plaque{background:rgba(28,20,10,.82);color:#ffd9a0;border:1px solid rgba(255,190,110,.35);
+    border-radius:3px;padding:2px 5px;text-transform:uppercase;letter-spacing:1px;font-size:8px;
+    box-shadow:0 2px 6px rgba(0,0,0,.5);}
+  .twincap{color:#dfe6ff;background:rgba(10,14,34,.72);border:1px solid var(--line);
+    border-radius:4px;padding:3px 7px;}
+  .twincap i{color:#ffd98a;font-style:normal;}
+
+  /* bottom bar: legend + footer */
+  .bottombar{position:absolute;left:0;right:0;bottom:8px;display:flex;flex-direction:column;
+    align-items:center;gap:8px;pointer-events:none;padding:0 10px;}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 8px;justify-content:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:7px 10px;
+    backdrop-filter:blur(1px);}
+  .li{display:flex;align-items:center;gap:6px;}
+  .li canvas{width:18px;height:18px;image-rendering:pixelated;display:block;}
+  .li .lab{font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);}
+  .li .lab b{color:#e8ecff;font-weight:600;}
+  .footer{font-size:9px;letter-spacing:1.4px;text-transform:uppercase;color:#7f8bc0;
+    text-shadow:0 1px 3px #000;}
+
+  @media (max-width:640px){
+    .title{font-size:10px;letter-spacing:1px;} .sub,.agents{font-size:9px;}
+    .li .lab{font-size:8px;} .li canvas{width:15px;height:15px;}
+    .footer{font-size:8px;letter-spacing:.8px;} .tag{font-size:8px;}
+  }
+</style>
+
+<div class="wrap">
+  <div class="stage" id="stage">
+    <canvas id="city"></canvas>
+
+    <div class="hud tl"><div class="panel">
+      <div class="title">AGENTCITY · <b>maya's city</b></div>
+      <div class="sub">day 94 · night shift</div>
+    </div></div>
+
+    <div class="hud tr"><div class="panel">
+      <div class="agents"><span class="dot g"></span><span class="work">3 agents working</span></div>
+      <div class="agents" style="margin-top:4px"><span class="dot r"></span><span class="wait">1 waiting on you</span></div>
+    </div></div>
+
+    <!-- in-scene labels (positioned in % to track the pixel scene) -->
+    <div class="tag plaque" style="left:19.8%;top:71.5%;">est. apr 2026</div>
+    <div class="tag twincap" style="left:55.4%;top:33%;">same work — <i>different architects</i></div>
+
+    <div class="bottombar">
+      <div class="legend" id="legend"></div>
+      <div class="footer">built by your agents, one session at a time · local-first</div>
+    </div>
+
+    <div class="vignette"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var LW=384, LH=200, S=3, GROUND=166, WATER=GROUND;
+  var cv=document.getElementById("city");
+  var ctx=cv.getContext("2d");
+  cv.width=LW*S; cv.height=LH*S;
+  ctx.setTransform(S,0,0,S,0,0);
+  ctx.imageSmoothingEnabled=false;
+  var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // ---------- pixel helpers ----------
+  function R(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w|0,h|0); }
+  function Rf(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x,y,w,h); } // float ok (rare)
+  function disc(cx,cy,r,c){
+    ctx.fillStyle=c;
+    for(var dy=-r;dy<=r;dy++){ var ww=Math.floor(Math.sqrt(r*r-dy*dy));
+      ctx.fillRect(cx-ww, cy+dy, ww*2+1, 1); }
+  }
+  function line(x0,y0,x1,y1,c){
+    ctx.fillStyle=c; x0=Math.round(x0);y0=Math.round(y0);x1=Math.round(x1);y1=Math.round(y1);
+    var dx=Math.abs(x1-x0),dy=Math.abs(y1-y0),sx=x0<x1?1:-1,sy=y0<y1?1:-1,e=dx-dy;
+    while(true){ ctx.fillRect(x0,y0,1,1); if(x0===x1&&y0===y1)break;
+      var e2=2*e; if(e2>-dy){e-=dy;x0+=sx;} if(e2<dx){e+=dx;y0+=sy;} }
+  }
+
+  // seeded rng for stable scene
+  function mkrng(seed){ var s=seed>>>0; return function(){ s=(s*1664525+1013904223)>>>0; return s/4294967296; }; }
+  var rng=mkrng(7);
+
+  // stars + backdrop precomputed
+  var stars=[]; for(var i=0;i<80;i++){ stars.push({x:Math.floor(rng()*LW), y:Math.floor(rng()*100),
+      s:(rng()<0.15?2:1), ph:rng()*6.28, sp:0.4+rng()*1.4}); }
+  var farA=[], farB=[]; var fx=-4;
+  while(fx<LW+6){ var w=6+Math.floor(rng()*10); farA.push({x:fx,w:w,t:118+Math.floor(rng()*26)}); fx+=w+Math.floor(rng()*3); }
+  fx=-6; while(fx<LW+6){ var w2=8+Math.floor(rng()*14); farB.push({x:fx,w:w2,t:104+Math.floor(rng()*30)}); fx+=w2-1+Math.floor(rng()*4); }
+
+  function hillTop(x){ // background hill rising to the right
+    if(x<296) return GROUND;
+    var t=(x-296)/(LW-296); if(t>1)t=1;
+    return GROUND - t*t*82;
+  }
+
+  // flicker: mostly-on lit windows with occasional dim
+  function bright(id,t){
+    var f=Math.sin(id*12.9898 + t*0.0024)+Math.sin(id*3.71 - t*0.0016);
+    return f>-1.35;
+  }
+  var C_WARM="#ffd98a", C_WARM_DIM="#caa050", C_DARKW="#1d2447", C_COLD="#bfe4ff", C_COLD_DIM="#6f93b8";
+
+  // window grid; litFn(c,r)->0/1 ; workerFn(c,r)->bool ; cold=true for glass
+  function windows(bx,by,ox,oy,cols,rows,sx,sy,ww,wh,litFn,t,cold,workerFn,idbase){
+    for(var r=0;r<rows;r++)for(var c=0;c<cols;c++){
+      var x=bx+ox+c*sx, y=by+oy+r*sy;
+      var id=idbase+c*7+r*31;
+      if(litFn(c,r)){
+        var on=bright(id,t);
+        // soft warm/cold glow
+        ctx.fillStyle= cold ? "rgba(150,205,255,0.16)" : "rgba(255,200,110,0.20)";
+        ctx.fillRect(x-1,y-1,ww+2,wh+2);
+        var col = cold ? (on?C_COLD:C_COLD_DIM) : (on?C_WARM:C_WARM_DIM);
+        R(x,y,ww,wh,col);
+        if(workerFn && workerFn(c,r) && on){ worker(x,y,ww,wh); }
+      } else {
+        R(x,y,ww,wh, cold?"#23324f":C_DARKW);
+      }
+    }
+  }
+  function worker(x,y,ww,wh){ // tiny silhouette against a lit window
+    var cx=x+Math.floor(ww/2);
+    R(cx-1, y+wh-3, 2,3, "#2a1c12");   // body
+    R(cx-1, y+wh-4, 2,1, "#3a2718");   // head
+  }
+
+  // ---------- scene render ----------
+  function render(t){
+    // SKY bands (pixel gradient)
+    var bands=[["#0a0d22",0],["#0c1230",34],["#111740",62],["#1a1c4c",86],["#2a2258",108],["#3a2c60",128]];
+    for(var b=0;b<bands.length;b++){ var top=bands[b][1], bot=b<bands.length-1?bands[b+1][1]:GROUND;
+      R(0,top,LW,bot-top,bands[b][0]); }
+
+    // STARS
+    for(var i=0;i<stars.length;i++){ var st=stars[i];
+      var tw = reduced?0.85 : (0.55+0.45*(0.5+0.5*Math.sin(t*0.001*st.sp+st.ph)));
+      ctx.fillStyle="rgba(205,214,255,"+tw.toFixed(2)+")";
+      ctx.fillRect(st.x,st.y,st.s,st.s);
+    }
+    // MOON + halo (top-right)
+    var mx=330,my=40,mr=13;
+    ctx.fillStyle="rgba(245,240,214,0.10)"; disc(mx,my,mr+10,"rgba(245,240,214,0.06)");
+    disc(mx,my,mr+5,"rgba(245,240,214,0.09)");
+    disc(mx,my,mr,"#f6f1d6");
+    disc(mx-4,my-4,4,"#e7e0be"); disc(mx+5,my+3,3,"#e7e0be"); disc(mx+1,my+6,2,"#e7e0be"); // craters
+
+    // FAR silhouettes (two parallax layers)
+    for(i=0;i<farB.length;i++){ var f=farB[i]; R(f.x,f.t,f.w,GROUND-f.t,"#141a3c"); }
+    for(i=0;i<farA.length;i++){ var g=farA[i]; R(g.x,g.t,g.w,GROUND-g.t,"#1a2148");
+      // a few dim distant windows
+      for(var wy=g.t+2;wy<GROUND-2;wy+=4)for(var wx=g.x+1;wx<g.x+g.w-1;wx+=3){
+        if((wx*7+wy*3+i)%11===0) R(wx,wy,1,1,"rgba(255,220,150,0.5)"); }
+    }
+
+    // HILL (right) behind right-side buildings
+    for(var hx=296;hx<LW;hx++){ var ty=hillTop(hx); R(hx,ty,1,GROUND-ty,"#161d40");
+      R(hx,ty,1,2,"#20285a"); }
+
+    // ================= FOREGROUND DISTRICTS =================
+    industrial(10, t);          // infra / bash
+    oldTown(60, t);             // first repo
+    glassTests(100, t);         // tests (glass & steel)
+    residential(126, t);        // coding  (+ distress beacon on roof)
+    cityHall(154, t);           // planning
+    twinTowers(188, t);         // agent-as-architect
+    clockTower(246, t);         // clock (accumulation)
+    construction(272, t);       // this week's new repo
+    decayed(300, t);            // abandoned repo
+    library(322, t);            // research + observatory (on hill)
+
+    // WATER
+    R(0,WATER,LW,LH-WATER,"#0a1030");
+    R(0,WATER,LW,2,"#141d46");
+    // moon reflection column
+    for(var ry=WATER+1;ry<LH;ry+=1){
+      var off = reduced?0 : Math.sin(ry*0.6 + t*0.004)*2;
+      ctx.fillStyle="rgba(245,240,214,"+(0.10*(1-(ry-WATER)/(LH-WATER))).toFixed(3)+")";
+      ctx.fillRect(mx-3+off, ry, 6, 1);
+    }
+    // warm window reflections shimmer
+    var refl=[[70,"#c98c3a"],[110,"#7fbfe6"],[136,"#e0a94e"],[200,"#8a7fd0"],[224,"#7fbfe6"]];
+    for(i=0;i<refl.length;i++){ var rx=refl[i][0];
+      for(ry=WATER+2;ry<LH;ry+=2){ var o=reduced?0:Math.sin(ry*0.7+t*0.005+i)*2;
+        ctx.fillStyle="rgba("+hexrgb(refl[i][1])+","+(0.16*(1-(ry-WATER)/(LH-WATER))).toFixed(3)+")";
+        ctx.fillRect(rx+o,ry,7,1);
+      }
+    }
+    harbor(t); // bridge + lighthouse (api) sits in the water, drawn on top of water
+  }
+
+  function hexrgb(h){ var n=parseInt(h.slice(1),16); return ((n>>16)&255)+","+((n>>8)&255)+","+(n&255); }
+
+  // ---- district builders ----
+  function industrial(x,t){ // factory block, smokestack, pipes, crane
+    var top=118;
+    R(x,top,40,GROUND-top,"#262a3e"); R(x,top,40,2,"#333955");
+    // roof saw-tooth
+    for(var s=0;s<5;s++){ R(x+2+s*8, top-4, 8,4, "#20243a"); }
+    // smokestack
+    R(x+6,80,7,top-80,"#3a2f36"); R(x+6,80,7,2,"#5a4650"); R(x+6,86,7,1,"#8a5a4a");
+    // pipes
+    R(x+16,GROUND-10,22,3,"#3a4058"); R(x+16,GROUND-22,3,15,"#3a4058"); R(x+30,GROUND-24,3,17,"#3a4058");
+    R(x+22,GROUND-16,3,3,"#5a6488"); R(x+34,GROUND-16,3,3,"#5a6488");
+    // small windows (infra: cold-ish few lit)
+    windows(x,top,4,6,6,3,7,9,3,4,function(c,r){return (c+r)%2===0;},t,false,null,301);
+    // crane on the block
+    R(x+34,84,2,top-84,"#6a5030"); R(x+34,84,16,2,"#6a5030"); line(x+50,86,x+50,96,"#3a2c18");
+    R(x+48,96,5,4,"#caa24a"); // container
+    // smoke puffs
+    for(var p=0;p<4;p++){ var ph=(reduced? p*11 : (t*0.02 + p*13)) % 46;
+      var sy=80-ph; var sx=x+9+Math.sin(ph*0.2+p)* (1+ph*0.05); var rad=1+Math.floor(ph/16);
+      ctx.fillStyle="rgba(150,155,175,"+(0.35*(1-ph/46)).toFixed(2)+")"; disc(Math.round(sx),Math.round(sy),rad,"rgba(0,0,0,0)");
+      ctx.fillStyle="rgba(150,155,175,"+(0.35*(1-ph/46)).toFixed(2)+")"; disc(Math.round(sx),Math.round(sy),rad,ctx.fillStyle);
+    }
+  }
+
+  function oldTown(x,t){ // weathered warm mid-rise, first repo
+    var top=100;
+    R(x,top,32,GROUND-top,"#4a3a4a");        // aged brick
+    R(x,top,32,2,"#5c4a5c");
+    R(x,GROUND-4,32,4,"#3a2e3a");             // grimy base
+    // slight weathering streaks
+    for(var s=0;s<6;s++) R(x+3+s*5, top+2, 1, 8+((s*13)%14), "rgba(0,0,0,0.18)");
+    // cornice
+    R(x-1,top-3,34,3,"#6a5468"); R(x+13,top-8,6,5,"#6a5468"); // little turret
+    // warm windows, cozy, mostly lit
+    windows(x,top,3,5,4,5,7,10,4,5,function(c,r){return (c*3+r*2+ (c===1&&r===1?0:1))%4!==2;},t,false,null,101);
+    // door + lantern
+    R(x+13,GROUND-9,6,9,"#2a2030"); R(x+11,GROUND-11,2,2,"#ffcf7a");
+  }
+
+  function glassTests(x,t){ // tall glass & steel — test-heavy repo
+    var top=48, w=24;
+    // body with subtle gradient bands
+    R(x,top,w,GROUND-top,"#294a63");
+    for(var y=top;y<GROUND;y+=2) R(x,y,w,1, (y%4===0)?"#2f5674":"#264257");
+    R(x,top,w,2,"#3c6e92"); R(x+w-1,top,1,GROUND-top,"#3c6e92"); // steel edge
+    R(x+w/2-1,top-9,2,9,"#7fd0ff"); // antenna
+    R(x+w/2-2,top-9,4,2,"#bfeaff");
+    // dense cold windows, many lit; a couple workers
+    windows(x,top,2,4,6,20,4,5.4,3,4,function(c,r){return (c*5+r*3)%4!==0;},t,true,
+      function(c,r){ return (c===1&&r===6)||(c===4&&r===11); },501);
+    // roof rig
+    R(x+3,top-3,w-6,3,"#20384a");
+  }
+
+  function residential(x,t){ // coding apartments, workers, DISTRESS BEACON on roof
+    var top=70, w=22;
+    R(x,top,w,GROUND-top,"#37324f"); R(x,top,w,2,"#453f60");
+    R(x,GROUND-3,w,3,"#2a2640");
+    // balconies rows
+    for(var y=top+7;y<GROUND-6;y+=11) R(x,y+6,w,1,"#2a2640");
+    // warm windows w/ workers
+    windows(x,top,3,5,4,9,5,11,4,5,function(c,r){return (c+r)%3!==2;},t,false,
+      function(c,r){ return (c===1&&r===2)||(c===2&&r===5); },201);
+    // rooftop distress beacon (agent waiting on human)
+    R(x+w/2-1,top-4,2,4,"#555");
+    var pulse = reduced?0.8 : (0.45+0.55*(0.5+0.5*Math.sin(t*0.006)));
+    ctx.fillStyle="rgba(255,70,60,"+(0.30*pulse).toFixed(2)+")"; disc(x+w/2, top-5, 6, ctx.fillStyle);
+    ctx.fillStyle="rgba(255,70,60,"+(0.55*pulse).toFixed(2)+")"; disc(x+w/2, top-5, 3, ctx.fillStyle);
+    R(x+w/2-1,top-6,2,2,"#ff6a5a");
+  }
+
+  function cityHall(x,t){ // small civic w/ dome + blueprint posters (planning)
+    var top=126, w=30;
+    R(x,top,w,GROUND-top,"#3a4258"); R(x,top,w,2,"#4c586f");
+    // columns
+    for(var c=0;c<5;c++) R(x+3+c*6,top+4,2,GROUND-top-8,"#2c3346");
+    // pediment + dome
+    for(var s=0;s<7;s++) R(x+ (w/2-1)-s, top-2-s, 2+s*2, 2, "#4c586f");
+    disc(x+w/2,top-8,5,"#5a678a"); R(x+w/2-1,top-15,2,4,"#8fa0c8"); // dome + spire
+    // blueprint posters (cyan boards)
+    R(x+2,GROUND-14,7,10,"#173a55"); R(x+3,GROUND-13,5,1,"#5fbfe6"); R(x+3,GROUND-10,5,1,"#5fbfe6"); R(x+3,GROUND-7,3,1,"#5fbfe6");
+    R(x+w-9,GROUND-14,7,10,"#173a55"); R(x+w-8,GROUND-12,5,1,"#5fbfe6"); R(x+w-8,GROUND-9,4,1,"#5fbfe6");
+    // door
+    R(x+w/2-2,GROUND-8,4,8,"#20263a"); R(x+w/2-2,GROUND-8,4,1,"#ffcf7a");
+  }
+
+  function twinTowers(x,t){ // SAME WORK, DIFFERENT ARCHITECTS
+    var top=74;
+    // Tower L — stepped / art-deco brick
+    var lx=x, lw=20;
+    R(lx+2,top+8,lw-4,GROUND-(top+8),"#4a4066");
+    R(lx,top+22,lw,GROUND-(top+22),"#524770");
+    R(lx+3,top,lw-6,20,"#453b60");     // setback crown
+    R(lx+lw/2-1,top-6,2,6,"#6a5c90");
+    R(lx,top+22,lw,2,"#5f5382"); R(lx+2,top+8,lw-4,2,"#5f5382");
+    windows(lx,top,3,12,3,9,6,10,4,5,function(c,r){return (c+ r)%2===0;},t,false,null,701);
+    // Tower R — flat modern glass
+    var rx=x+22, rw=20;
+    R(rx,top,rw,GROUND-top,"#34506e");
+    for(var y=top;y<GROUND;y+=6){ R(rx,y,rw,3,"#3f6188"); R(rx,y+3,rw,1,"#284258"); } // horizontal glass bands
+    R(rx,top,rw,2,"#4f7aa6"); R(rx+rw-1,top,1,GROUND-top,"#4f7aa6");
+    windows(rx,top,2,3,4,11,5,9,3,4,function(c,r){return (c*3+r)%3!==1;},t,true,null,721);
+    // little connector marks (same footprint)
+    R(lx-1,GROUND-2,rw+lw+3,2,"#252b44");
+  }
+
+  function clockTower(x,t){ // real clock (accumulation cue)
+    var top=80, w=18;
+    R(x,top,w,GROUND-top,"#3c3550"); R(x,top,w,2,"#4e4568");
+    // spire roof
+    for(var s=0;s<6;s++) R(x+(w/2)-s-1, top-2-s*1.6, 2+s*2, 2, "#5a4d40");
+    R(x+w/2-1,top-14,2,4,"#c8a24a");
+    windows(x,top+16,3,4,3,5,5,9,3,4,function(c,r){return (c+r)%2===1;},t,false,null,801);
+    // clock face
+    var ccx=x+w/2, ccy=top+8, rr=6;
+    disc(ccx,ccy,rr+1,"#2a2338"); disc(ccx,ccy,rr,"#efe8cc");
+    // ticks
+    for(var a=0;a<12;a++){ var ang=a/12*6.2832; R(Math.round(ccx+Math.cos(ang)*(rr-1))-0, Math.round(ccy+Math.sin(ang)*(rr-1)),1,1,"#5a5238"); }
+    var now=new Date(); var hh=now.getHours()%12, mm=now.getMinutes();
+    var ha=(hh+mm/60)/12*6.2832 - Math.PI/2, ma=mm/60*6.2832 - Math.PI/2;
+    for(var k=0;k<=3;k++) R(Math.round(ccx+Math.cos(ha)*k), Math.round(ccy+Math.sin(ha)*k),1,1,"#241d10");
+    for(k=0;k<=5;k++) R(Math.round(ccx+Math.cos(ma)*k), Math.round(ccy+Math.sin(ma)*k),1,1,"#3a2f18");
+    R(ccx,ccy,1,1,"#7a1f1f");
+  }
+
+  function construction(x,t){ // this week's new repo — scaffolding + crane
+    var top=112, w=24;         // only lower floors built
+    R(x,top,w,GROUND-top,"#2f3550"); R(x,top,w,2,"#3c455f");
+    windows(x,top,3,5,3,3,7,10,4,5,function(c,r){return r===2 && c!==2;},t,false,null,901);
+    // scaffolding lattice above the built part
+    var stop=70;
+    ctx.fillStyle="#7a6a3a";
+    for(var vx=x;vx<=x+w;vx+=6) R(vx,stop,1,top-stop,"#7a6a3a");
+    for(var hy=stop;hy<top;hy+=7) R(x,hy,w,1,"#7a6a3a");
+    // diagonal braces
+    line(x,top,x+12,stop+6,"#5f5230"); line(x+12,top,x+24,stop+6,"#5f5230");
+    // worker on scaffold
+    worker(x+8,stop+9,3,4);
+    // crane
+    R(x+w-3,54,2,top-54,"#c94f3a");          // mast (safety red)
+    R(x-2,54,w+8,2,"#d0592f");               // jib
+    R(x-2,54,2,2,"#e0a94e");                 // counterweight
+    line(x+6,56,x+6,66,"#2a2418");           // cable
+    R(x+4,66,5,4,"#b98a3a");                 // load
+    // build glow at top
+    var g = reduced?0.7:(0.4+0.6*(0.5+0.5*Math.sin(t*0.02)));
+    ctx.fillStyle="rgba(255,180,80,"+(0.3*g).toFixed(2)+")"; disc(x+w/2,top-1,7,ctx.fillStyle);
+  }
+
+  function decayed(x,t){ // abandoned repo — dark, cracked, vines
+    var top=112, w=22;
+    R(x,top,w,GROUND-top,"#20242f"); R(x,top,w,2,"#282d3a");
+    R(x,GROUND-3,w,3,"#171a22");
+    // broken roofline
+    R(x+4,top-3,4,3,"#20242f"); R(x+13,top-2,3,2,"#20242f");
+    // dark & broken windows (none warm; one shattered)
+    windows(x,top,3,4,3,4,7,11,4,5,function(){return false;},t,false,null,991);
+    R(x+3+7,top+4+22,4,5,"#0c0e14"); // a black hollow window
+    // cracks
+    line(x+11,top,x+8,top+18,"rgba(0,0,0,0.55)"); line(x+8,top+18,x+13,GROUND-4,"rgba(0,0,0,0.55)");
+    // vines
+    ctx.fillStyle="#2f5a34";
+    for(var vx=x+2;vx<x+w;vx+=5){ for(var vy=top;vy<GROUND-2;vy+=2){ if(((vx+vy)*3)%5<2) R(vx+((vy/2)%2),vy,1,2,"#2f5a34"); } }
+    R(x+2,top,2,10,"#356b3a"); R(x+w-4,top+2,2,14,"#356b3a");
+  }
+
+  function library(x,t){ // research + observatory dome, sits on the hill
+    // library block
+    var lx=x, lw=24, base=Math.round(hillTop(lx+lw/2)), top=base-46;
+    R(lx,top,lw,base-top,"#3a3550"); R(lx,top,lw,2,"#4a4468");
+    // grand steps + pillars
+    for(var c=0;c<4;c++) R(lx+3+c*6,top+6,2,base-top-8,"#2c2840");
+    for(var s=0;s<6;s++) R(lx+(lw/2-1)-s, top-2-s, 2+s*2, 2, "#4a4468"); // pediment
+    windows(lx,top,3,10,4,4,5,9,4,5,function(c,r){return (c+r)%3!==0;},t,false,
+      function(c,r){return c===2&&r===1;},601);
+    // observatory dome on the hilltop (right)
+    var ox=x+34, obase=Math.round(hillTop(ox+8)), otop=obase-16;
+    R(ox,otop,16,obase-otop,"#2e3550"); R(ox,otop,16,2,"#3c4568");
+    disc(ox+8,otop,9,"#54607f"); disc(ox+8,otop-1,9,"rgba(0,0,0,0)");
+    disc(ox+8,otop,9,"#54607f");
+    R(ox+7,otop-9,2,7,"#8fa0c8"); // dome slit / scope
+    // telescope slit glow
+    R(ox+6,otop-6,4,2,"rgba(150,205,255,0.5)");
+    windows(ox,otop+2,2,3,3,2,5,7,3,4,function(c,r){return (c+r)%2===0;},t,true,null,661);
+    // tiny beam of research light to sky
+    if(!reduced){ ctx.fillStyle="rgba(150,205,255,0.06)";
+      ctx.beginPath(); ctx.moveTo(ox+8,otop-8); ctx.lineTo(ox+2,otop-30); ctx.lineTo(ox+14,otop-30); ctx.closePath(); ctx.fill(); }
+  }
+
+  function harbor(t){ // bridge + lighthouse (api / integration) at the water's edge, right
+    // small pier bridge over the water
+    var bx=298, bw=40, deck=WATER+3;
+    R(bx,deck,bw,2,"#3a3346");
+    // arch + pillars
+    line(bx,deck,bx+bw/2,deck-6,"#463d54"); line(bx+bw/2,deck-6,bx+bw,deck,"#463d54");
+    for(var px=bx+4;px<bx+bw;px+=8) R(px,deck+2,2,LH-(deck+2),"#2a2436");
+    // railing posts
+    for(px=bx;px<=bx+bw;px+=5) R(px,deck-3,1,3,"#4a4358");
+
+    // lighthouse on a rock in the water (front right)
+    var hx=352, base=LH-2, top=118;
+    R(hx-6,base-4,16,6,"#20242f"); // rock
+    // tapered striped tower
+    for(var y=top;y<base-4;y+=2){ var wd=6 + Math.round((y-top)/(base-4-top)*4);
+      var col = (Math.floor((y-top)/6)%2===0)?"#e7e0d0":"#c0392f";
+      R(hx-wd/2,y,wd,2,col);
+    }
+    R(hx-5,top-3,10,4,"#2c3140"); // gallery
+    R(hx-3,top-8,6,5,"#3a4152"); // lamp room
+    // lamp
+    var lp=reduced?0.9:(0.5+0.5*(0.5+0.5*Math.sin(t*0.01)));
+    R(hx-2,top-7,4,3,"#fff2b0");
+    ctx.fillStyle="rgba(255,240,150,"+(0.5*lp).toFixed(2)+")"; disc(hx,top-6,5,ctx.fillStyle);
+    // sweeping beam
+    var ang = reduced? -0.6 : (Math.sin(t*0.0011)*0.9 - 0.5);
+    ctx.save(); ctx.translate(hx,top-6); ctx.rotate(ang);
+    ctx.fillStyle="rgba(255,240,150,0.10)";
+    ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(70,-9); ctx.lineTo(70,9); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // ---------- legend icons ----------
+  var ICONS={
+    code:["#8ff0b5",["...........","...XX.XX...","..X....X...",".X......X..","..X....X...","...XX.XX...","..........."]],
+    tests:["#7fd0ff",[".........",".......X.","......X..",".....X...","X...X....",".X.X.....","..X......",".........",]],
+    infra:["#ffb066",[".........","..X.X.X..",".XXXXXXX.",".X.XXX.X.",".XXXXXXX.",".X.XXX.X.",".XXXXXXX.","..X.X.X..",".........",]],
+    api:["#62d6c4",[".........",".XXX.XXX.",".X.XXX.X.",".X.XXX.X.",".XXX.XXX.",".........",]],
+    research:["#c8a6ff",[".........",".XX...XX.","XXXX.XXXX","X..X.X..X","X..X.X..X","XXXX.XXXX",".XX...XX.",]],
+    planning:["#ffd27a",["X........","XX.......","X.X......","X..X.....","X...X....","X....X...","X.....X..","XXXXXXXX.",]]
+  };
+  var LEG=[["code","code",ICONS.code],["tests","tests",ICONS.tests],["infra","infra · bash",ICONS.infra],
+           ["api","api",ICONS.api],["research","research · web",ICONS.research],["planning","planning",ICONS.planning]];
+  function paintIcon(canvas, def){
+    var color=def[0], rows=def[1], n=rows.length, m=rows[0].length;
+    canvas.width=m; canvas.height=n; var c=canvas.getContext("2d"); c.imageSmoothingEnabled=false;
+    c.clearRect(0,0,m,n);
+    for(var y=0;y<n;y++)for(var xx=0;xx<m;xx++){ if(rows[y][xx]!=="."){ c.fillStyle=color; c.fillRect(xx,y,1,1); } }
+  }
+  (function buildLegend(){
+    var el=document.getElementById("legend");
+    for(var i=0;i<LEG.length;i++){ var it=LEG[i];
+      var d=document.createElement("div"); d.className="li";
+      var cn=document.createElement("canvas"); paintIcon(cn, it[2]);
+      var lab=document.createElement("span"); lab.className="lab"; lab.innerHTML="<b>"+it[1]+"</b>";
+      d.appendChild(cn); d.appendChild(lab); el.appendChild(d);
+    }
+  })();
+
+  // ---------- loop ----------
+  var last=0;
+  function frame(ts){
+    if(reduced){ render(9000); return; }
+    if(ts-last>=45){ last=ts; render(ts); }   // ~22fps, cozy + light
+    requestAnimationFrame(frame);
+  }
+  if(reduced){ render(9000); }
+  else requestAnimationFrame(frame);
+})();
+</script>
