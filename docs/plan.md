@@ -185,6 +185,20 @@ rest. Config knob `history_influence: full|capped` (default full).
   must archive instead of prune (or hook the rotation). city = f(events,
   seed) stays fully re-derivable from archives. Backup = copy one dir.
 
+## 4i. Live presence layer (2026-07-08, user: "birds circling the roof")
+
+Minute-scale feedback riding the SSE stream as {"type":"activity",repo,kind,
+tool} messages (server poll pushes them alongside fold deltas). Atmosphere
+only — never map state, never determinism-relevant:
+- active repo (last 60s) → 1-4 birds circling that roof (rate-scaled)
+- Bash bursts → chimney puffs quicken · Edit bursts → window flicker
+- turn.end → roof sparkle (+ chime if sound on)
+- fork.start → minion scurries in the door (pixelagents crossover)
+- waiting.human → beacon + birds perch
+- caps (≤10 birds global), reduced-motion excluded
+Complements the accumulation layer: tiers answer "what did I build",
+presence answers "what is happening right now".
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
