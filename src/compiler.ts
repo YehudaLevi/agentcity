@@ -49,12 +49,20 @@ import {
   maybeExpand,
   railPath,
   revealedWater,
+  widenAvenue,
   CHUNK,
   GRID,
   CENTER,
 } from "./rules/placement.js";
 
 const DEFAULT_CONFIG: CityConfig = { historyInfluence: "full", aliases: {} };
+
+// Defense in depth (see ingest/claude-history.ts BUG-2 fix): a repo named after
+// a subagent worktree ("agent-<hex>") must NEVER found a lot. The ingest layer
+// already re-attributes subagent worktrees to their parent repo, so in practice
+// no such repo reaches the fold; this is a belt-and-suspenders guard so a stale
+// checkpoint or an un-patched event source can't resurrect phantom lots.
+const PHANTOM_REPO = /^agent-a[0-9a-f]{12,}$/;
 
 // ============================ time helpers ============================
 
@@ -269,6 +277,7 @@ interface Activity {
 function aggregate(st: State, dayEvents: PixelEvent[]): Activity[] {
   const map = new Map<string, Activity>();
   for (const ev of dayEvents) {
+    if (PHANTOM_REPO.test(ev.repo)) continue; // never let subagent worktrees found lots
     let a = map.get(ev.repo);
     if (!a) {
       a = {
@@ -483,7 +492,17 @@ function applyEconomy(st: State, acts: Activity[]): void {
         const rt = roadTier(road.usage);
         if (rt > road.tier) {
           road.tier = rt;
-          emit(st, "road.upgrade", { id: road.id, tier: rt });
+          const fields: Record<string, unknown> = { id: road.id, tier: rt };
+          // top-tier corridors become 2-tile-wide avenues: lay parallel road
+          // tiles and carry the widened path on the delta so replay matches.
+          if (rt >= 3) {
+            const extra = widenAvenue(st.geo, road.path);
+            if (extra.length) {
+              road.path = [...road.path, ...extra];
+              fields.path = road.path;
+            }
+          }
+          emit(st, "road.upgrade", fields);
         }
       }
     }
@@ -828,11 +847,26 @@ function recordCarvedWater(st: State): void {
 
 // ============================ public API ============================
 
-function runDays(st: State, events: PixelEvent[], fromDay: number): void {
-  if (!events.length) return;
+/**
+ * Fold every COMPLETE day in `events` (days [fromDay .. openDay-1]) into `st`,
+ * and return the still-OPEN day (the highest day index present) together with
+ * its raw events. The open day is deliberately NOT applied here — the caller
+ * re-folds it from a committed snapshot on every resume so that:
+ *   • `day` is always the whole-days-since-foundedTs calendar diff (a day is
+ *     only "reached" when an event lands on it — never a free-running counter);
+ *   • daily caps (per-repo warehouse + GLOBAL_DAILY_CAP) always see the WHOLE
+ *     day at once, so an incremental fold that resumes mid-day is byte-identical
+ *     to a full fold instead of double-counting or dropping same-day events.
+ */
+function runCommitted(
+  st: State,
+  events: PixelEvent[],
+  fromDay: number
+): { openDay: number; openEvents: PixelEvent[] } {
+  if (!events.length) return { openDay: fromDay, openEvents: [] };
   const founded = st.foundedTs || dateKey(events[0]!.ts);
   if (!st.foundedTs) st.foundedTs = founded;
-  const maxDay = Math.max(fromDay, ...events.map((e) => dayIndex(e.ts, founded)));
+  const openDay = Math.max(fromDay, ...events.map((e) => dayIndex(e.ts, founded)));
   const byDay = new Map<number, PixelEvent[]>();
   for (const ev of events) {
     const d = dayIndex(ev.ts, founded);
@@ -841,29 +875,50 @@ function runDays(st: State, events: PixelEvent[], fromDay: number): void {
     byDay.set(d, arr);
   }
   for (const arr of byDay.values()) arr.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  for (let d = fromDay; d <= maxDay; d++) {
+  for (let d = fromDay; d < openDay; d++) {
     st.day = d;
     stepDay(st, byDay.get(d) ?? []);
   }
+  return { openDay, openEvents: byDay.get(openDay) ?? [] };
 }
 
-function finalize(st: State, events: PixelEvent[]): FoldResult {
+function finalize(
+  st: State,
+  openDay: number,
+  openEvents: PixelEvent[],
+  upToTs: string
+): FoldResult {
+  // Snapshot resumable state as of the last COMPLETE day (openDay-1), BEFORE the
+  // open day is applied. carvedWater is recorded here so the snapshot's terrain
+  // rebuilds to the pre-open-day base (the open day re-carves on resume).
   recordCarvedWater(st);
-  // full fold: back-patch the day-0 baseline.init delta with final biome so the
-  // renderer's delta-replay reconstructs model.biome. (Absent in incremental
-  // folds, whose baseline.init lives in the earlier checkpoint's delta log.)
+  const committed = structuredClone(serializeState(st)) as Checkpoint["state"];
+  committed.day = openDay - 1;
+
+  // Overlay the OPEN day onto the live state to build the served model + deltas.
+  // This is the one day that gets re-derived on every resume (from cp.pending).
+  st.day = openDay;
+  stepDay(st, openEvents);
+  // back-patch the day-0 baseline.init delta with final biome so the renderer's
+  // delta-replay reconstructs model.biome (a no-op for incremental folds, whose
+  // baseline.init lives in the earlier checkpoint's delta log).
   patchBaselineDelta(st);
-  // final delta of every fold (full and incremental): overwrite exact per-lot
-  // wu/progress/lastActiveDay/decay so delta replay == model (byte-exact).
+  // final delta of every fold: overwrite exact per-lot wu/progress/lastActiveDay/
+  // decay so delta replay == model (byte-exact).
   emitSyncLots(st);
-  const model = assembleModel(st);
-  const upToTs = events.length ? events[events.length - 1]!.ts : new Date(0).toISOString();
+  const model = assembleModel(st); // model.day = st.day = openDay = calendar diff
+
+  // Resume must continue seq PAST the provisional open-day deltas so the delta
+  // stream never reuses a seq (open-day deltas are regenerated on resume).
+  committed.seq = st.seq;
+
   const checkpoint: Checkpoint = {
     version: 1,
     seed: st.seed,
     upToTs,
     model,
-    state: serializeState(st),
+    state: committed,
+    pending: openEvents,
   };
   return { model, deltas: st.deltas, checkpoint };
 }
@@ -877,14 +932,16 @@ export function fold(
   const cfg: CityConfig = { ...DEFAULT_CONFIG, ...config, aliases: config.aliases ?? {} };
   const sorted = events.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   const st = initState(seed, cfg);
-  runDays(st, sorted, 0);
-  return finalize(st, sorted);
+  const { openDay, openEvents } = runCommitted(st, sorted, 0);
+  const upToTs = sorted.length ? sorted[sorted.length - 1]!.ts : new Date(0).toISOString();
+  return finalize(st, openDay, openEvents, upToTs);
 }
 
 /**
- * Incremental fold: continue from a checkpoint with events that occur strictly
- * after the checkpoint's last processed day. Byte-identical to a full fold over
- * (originalEvents + newEvents).
+ * Incremental fold: continue from a checkpoint. The checkpoint's still-open day
+ * (cp.pending) is prepended to the new events and the open day is re-folded from
+ * the committed snapshot, so the result is byte-identical to a full fold over
+ * (originalEvents + newEvents) for ANY split point — including mid-day.
  */
 export function foldIncremental(
   cp: Checkpoint,
@@ -893,10 +950,13 @@ export function foldIncremental(
 ): FoldResult {
   const cfg: CityConfig = { ...DEFAULT_CONFIG, ...config, aliases: config.aliases ?? {} };
   const st = deserializeState(cp, cfg);
-  const sorted = newEvents.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  const fromDay = st.day + 1;
-  runDays(st, sorted, fromDay);
-  return finalize(st, sorted.length ? sorted : []);
+  const pending = cp.pending ?? [];
+  const allTail = [...pending, ...newEvents].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+  if (!allTail.length) return { model: cp.model, deltas: [], checkpoint: cp };
+  const fromDay = st.day + 1; // = cp.state.day + 1 = the previously-open day
+  const { openDay, openEvents } = runCommitted(st, allTail, fromDay);
+  const upToTs = allTail[allTail.length - 1]!.ts;
+  return finalize(st, openDay, openEvents, upToTs);
 }
 
 // re-export handy bits for CLI/tests

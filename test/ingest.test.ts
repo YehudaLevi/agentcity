@@ -66,6 +66,35 @@ describe("claude-history ingest", () => {
   });
 });
 
+describe("subagent worktrees never become their own repo (BUG-2)", () => {
+  const SUB = join(here, "fixtures", "subagent-history");
+  const events = parseClaudeHistory(SUB);
+
+  it("attributes subagent worktree transcripts to the PARENT repo, not agent-<id>", () => {
+    expect(events.length).toBeGreaterThan(0);
+    const repos = new Set(events.map((e) => e.repo));
+    // no phantom "agent-*" repos at all
+    expect([...repos].some((r) => /^agent-/.test(r))).toBe(false);
+    // everything (parent session + worktree subagent) credits the one repo
+    expect(repos).toEqual(new Set(["myrepo"]));
+  });
+
+  it("credits the subagent's actual work (Edit) to the parent repo", () => {
+    const edit = events.find((e) => e.kind === "tool.post");
+    expect(edit).toBeTruthy();
+    expect(edit!.repo).toBe("myrepo");
+    // the fork itself (Task in the parent transcript) also lands on the parent
+    expect(events.some((e) => e.kind === "fork.start" && e.repo === "myrepo")).toBe(true);
+  });
+
+  it("attributes cwd-less subagent entries to the project repo (fallback)", () => {
+    // the agent-a0000… transcript has NO cwd line anywhere; it must inherit myrepo
+    const write = events.find((e) => e.tool === "Write");
+    expect(write).toBeTruthy();
+    expect(write!.repo).toBe("myrepo");
+  });
+});
+
 describe("pixelagents-log ingest", () => {
   it("parses events.jsonl and tolerates corrupt lines", () => {
     const events = parsePixelagentsLog(PIXEL);

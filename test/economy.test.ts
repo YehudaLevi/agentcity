@@ -39,7 +39,10 @@ describe("economy units + caps (unit)", () => {
 
 describe("economy caps (integration through fold)", () => {
   it("a heavy single day never builds more than the per-repo cap", () => {
-    const { model, checkpoint } = fold(pairs("solo", 0, 200), "cap1");
+    // A trailing event on a later day makes "solo"'s heavy day 0 a COMPLETE day
+    // so it lands in checkpoint.state (the checkpoint commits only whole days;
+    // the still-open last day is re-derived from checkpoint.pending on resume).
+    const { model, checkpoint } = fold([...pairs("solo", 0, 200), ...pairs("other", 2, 1)], "cap1");
     const lot = model.lots.find((l) => l.repo === "solo")!;
     expect(lot.wu).toBe(PER_REPO_DAILY_CAP);
     const wh = new Map(checkpoint.state.warehouse);

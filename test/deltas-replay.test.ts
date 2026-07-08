@@ -72,7 +72,10 @@ function replay(deltas: CityDelta[]) {
         break;
       case "road.upgrade": {
         const r = roadById.get(d.id as string);
-        if (r) r.tier = d.tier;
+        if (r) {
+          r.tier = d.tier;
+          if (d.path) r.path = d.path; // top-tier avenues widen: carry new path
+        }
         break;
       }
       case "rail.add":

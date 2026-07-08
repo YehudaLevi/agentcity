@@ -237,6 +237,13 @@ export interface Checkpoint {
   upToTs: string;
   model: CityModel;
   state: SerializedState; // internal resumable state (extends the 4-field contract)
+  // Raw events of the still-OPEN day (the highest day index seen). `state` is
+  // committed only through complete days (state.day = openDay - 1); the open
+  // day is re-folded fresh from `pending` on every resume. This keeps day
+  // numbers = calendar diff and makes incremental folds byte-identical to a
+  // full fold even when a checkpoint is taken mid-day (daily caps aggregate a
+  // whole day, so a partially-folded day can never be extended incrementally).
+  pending: PixelEvent[];
 }
 
 export interface FoldResult {

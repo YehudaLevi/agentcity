@@ -92,8 +92,10 @@ export function foundFromEvents(
   const result = fold(sorted, seed, config);
   archiveEvents(root, sorted);
   writeCheckpoint(root, result.checkpoint);
-  // fresh deltas.jsonl: replace any stale log with this fold's full stream.
-  writeDeltaLog(root, result.deltas);
+  // fresh deltas.jsonl: replace any stale log with this fold's COMMITTED stream.
+  // The still-open day (re-derived on every resume) is served live via the model
+  // but not persisted, so a later poll appends its final deltas exactly once.
+  writeDeltaLog(root, committedDeltas(result));
   writeConfig(root, {
     seed,
     historyInfluence: config.historyInfluence ?? "full",
@@ -140,13 +142,17 @@ export function incremental(
   }
   const result = foldIncremental(cp, newEvents, opts.config);
   archiveEvents(root, newEvents);
-  appendDeltas(root, result.deltas);
+  // Persist only days that just became COMPLETE (> the previous committed
+  // frontier, ≤ the new one). The open day is re-derived, so it is never
+  // appended; it reaches the log once a later fold completes it.
+  appendDeltas(root, newlyCommittedDeltas(cp, result));
   writeCheckpoint(root, result.checkpoint);
   void seed; // seed is fixed by the checkpoint; resolveSeed not consulted on resume
   return {
     founded: false,
     model: result.model,
-    deltas: readDeltas(root),
+    // full served stream: persisted committed history + this fold's open day.
+    deltas: [...readDeltas(root), ...openDayDeltas(result)],
     checkpoint: result.checkpoint,
     upToTs: result.checkpoint.upToTs,
   };
@@ -178,9 +184,40 @@ export function poll(root: string, sources: Sources, opts: FoundOptions = {}): P
   if (!newEvents.length) return null;
   const result = foldIncremental(cp, newEvents, opts.config);
   archiveEvents(root, newEvents);
-  appendDeltas(root, result.deltas);
+  appendDeltas(root, newlyCommittedDeltas(cp, result));
   writeCheckpoint(root, result.checkpoint);
-  return { model: result.model, newDeltas: result.deltas, checkpoint: result.checkpoint };
+  // Push everything past the previous committed frontier to SSE clients: the
+  // days that just finalized plus the live (still-open) day.
+  const newDeltas = result.deltas.filter((d) => d.day > cp.state.day);
+  return { model: result.model, newDeltas, checkpoint: result.checkpoint };
+}
+
+// ============================ delta partitioning (open vs committed) ============================
+//
+// A fold commits only COMPLETE days into checkpoint.state (state.day = openDay-1)
+// and re-derives the open day from checkpoint.pending on every resume. These
+// helpers split a fold's delta stream accordingly so the append-only log never
+// duplicates the re-derived open day.
+
+/** Deltas for days already committed in this result (day ≤ state.day). */
+function committedDeltas(result: { deltas: CityDelta[]; checkpoint: Checkpoint }): CityDelta[] {
+  const frontier = result.checkpoint.state.day;
+  return result.deltas.filter((d) => d.day <= frontier);
+}
+
+/** Deltas for days that became complete in THIS fold (prevFrontier < day ≤ new). */
+function newlyCommittedDeltas(
+  prev: Checkpoint,
+  result: { deltas: CityDelta[]; checkpoint: Checkpoint }
+): CityDelta[] {
+  const frontier = result.checkpoint.state.day;
+  return result.deltas.filter((d) => d.day > prev.state.day && d.day <= frontier);
+}
+
+/** Deltas for the still-open day (day > state.day) — served live, never persisted. */
+function openDayDeltas(result: { deltas: CityDelta[]; checkpoint: Checkpoint }): CityDelta[] {
+  const frontier = result.checkpoint.state.day;
+  return result.deltas.filter((d) => d.day > frontier);
 }
 
 /**

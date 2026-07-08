@@ -30,6 +30,8 @@
   #hudTL{top:12px;left:12px;max-width:250px;}
   #hudTL .big{font-size:15px;color:var(--gold);font-weight:bold;letter-spacing:2px;}
   #hudTL .sub{color:var(--ink-dim);font-size:10px;margin-top:2px;}
+  #livedot{font-size:9px;color:#4a4a52;vertical-align:middle;transition:color .3s;}
+  #livedot.on{color:var(--green);text-shadow:0 0 5px var(--green);}
   #hudTL .sub b{color:var(--cyan);font-weight:normal;}
 
   /* control bar */
@@ -120,7 +122,7 @@
   <canvas id="world"></canvas>
 
   <div id="hudTL" class="hud panel">
-    <div class="big">AGENTCITY</div>
+    <div class="big">AGENTCITY <span id="livedot" title="live feed">&#9679;</span></div>
     <div class="sub" id="cityLine">loading…</div>
   </div>
 
@@ -139,6 +141,11 @@
     <input id="scrub" class="tl-only" type="range" min="0" max="90" value="0">
     <div class="sep"></div>
     <div class="seg" id="alias" title="swap between repo names and aliases">repo names: ON</div>
+    <div class="sep"></div>
+    <div class="grp" id="rotate" title="rotate the map (r)">
+      <div class="seg" id="rotL">&#8635;</div>
+      <div class="seg" id="rotR">&#8634;</div>
+    </div>
     <div class="sep"></div>
     <span class="lbl">TIME</span>
     <div class="seg on" id="auto">AUTO</div>
@@ -175,12 +182,12 @@
   <div id="legend" class="hud panel">
     <h4>DISTRICTS &rarr; WORK</h4>
     <div class="li"><span class="chip" style="background:#c96f4c"></span>code &middot; residential</div>
-    <div class="li"><span class="chip" style="background:#5fb8d6"></span>tests &middot; glass</div>
-    <div class="li"><span class="chip" style="background:#9aa0aa"></span>infra &middot; industry</div>
-    <div class="li"><span class="chip" style="background:#4fc09a"></span>api &middot; harbor</div>
-    <div class="li"><span class="chip" style="background:#c9a86a"></span>research &middot; library</div>
-    <div class="li"><span class="chip" style="background:#6f7ad6"></span>web &middot; observatory</div>
-    <div class="li"><span class="chip" style="background:#5f82d6"></span>planning &middot; civic</div>
+    <div class="li"><span class="chip" style="background:#4aa6d8"></span>tests &middot; glass</div>
+    <div class="li"><span class="chip" style="background:#9a4a34"></span>infra &middot; industry</div>
+    <div class="li"><span class="chip" style="background:#a9723e"></span>api &middot; harbor</div>
+    <div class="li"><span class="chip" style="background:#c3b48c"></span>research &middot; library</div>
+    <div class="li"><span class="chip" style="background:#5f6bc6"></span>web &middot; observatory</div>
+    <div class="li"><span class="chip" style="background:#cfc7ac"></span>planning &middot; civic</div>
   </div>
 
   <div id="zoom">
@@ -216,6 +223,7 @@
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const SELFTEST = /[?&]selftest\b/.test(location.search);
 const errors=[];
+let unknownSprites=0;   // incremented whenever a sprite would fall back to unknown (selftest asserts 0)
 window.addEventListener("error", e=>{ errors.push(String(e.message||e.error||e)); });
 
 // ============================ deterministic RNG (atmosphere only) ============================
@@ -235,23 +243,36 @@ const HW=16, HH=8, CHUNK=10, GRIDCH=6, GRID=CHUNK*GRIDCH; // 60x60 world tiles
 const ZOOMS=[2,3,4,5]; let zi=1, zoom=ZOOMS[zi];
 let W=0,H=0,DPR=1, camIx=0, camIy=0;
 
-function gridIso(gx,gy){return{x:(gx-gy)*HW, y:(gx+gy)*HH};}
-function tileCenterIso(tx,ty){return{x:(tx-ty)*HW, y:(tx+ty+1)*HH};}
+// ---- map rotation: 4 orientations (90° steps), applied at projection time on
+// GRIDLINE coords about the grid centre. Model/tile data are never mutated; the
+// renderer just rotates coordinates and re-sorts painter order. (§ user request)
+let orient=0;
+function applyRot(gx,gy){ const C=GRID/2, u=gx-C, v=gy-C;
+  switch(orient&3){ case 0:return[u+C,v+C]; case 1:return[v+C,-u+C]; case 2:return[-u+C,-v+C]; default:return[-v+C,u+C]; } }
+function invRot(rx,ry){ const C=GRID/2, u=rx-C, v=ry-C;
+  switch(orient&3){ case 0:return[u+C,v+C]; case 1:return[-v+C,u+C]; case 2:return[-u+C,-v+C]; default:return[v+C,-u+C]; } }
+function gridIso(gx,gy){ const r=applyRot(gx,gy); return{x:(r[0]-r[1])*HW, y:(r[0]+r[1])*HH}; }
+function tileCenterIso(tx,ty){ return gridIso(tx+0.5,ty+0.5); }        // visual centre of a tile
+function depthOf(tx,ty){ const r=applyRot(tx+0.5,ty+0.5); return r[0]+r[1]; } // painter order (rotation-aware)
 function projWorld(ix,iy){return{x:Math.round((ix-camIx)*zoom+W/2), y:Math.round((iy-camIy)*zoom+H/2)};}
-function screenToTile(sx,sy){const ix=(sx-W/2)/zoom+camIx, iy=(sy-H/2)/zoom+camIy; const a=ix/HW, b=iy/HH-1; return{tx:(a+b)/2, ty:(b-a)/2};}
+function screenToTile(sx,sy){ const ix=(sx-W/2)/zoom+camIx, iy=(sy-H/2)/zoom+camIy;
+  const rx=(ix/HW+iy/HH)/2, ry=(iy/HH-ix/HW)/2;   // rotated gridline coords of the tile centre
+  const m=invRot(rx,ry); return{tx:m[0]-0.5, ty:m[1]-0.5}; }
 
 function shade(hex,f){const n=parseInt(hex.slice(1),16);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;r=Math.min(255,Math.max(0,Math.round(r*f)));g=Math.min(255,Math.max(0,Math.round(g*f)));b=Math.min(255,Math.max(0,Math.round(b*f)));return"rgb("+r+","+g+","+b+")";}
 function mix(a,b,t){const pa=parseInt(a.slice(1),16),pb=parseInt(b.slice(1),16);const r=Math.round(((pa>>16)&255)*(1-t)+((pb>>16)&255)*t);const g=Math.round(((pa>>8)&255)*(1-t)+((pb>>8)&255)*t);const bl=Math.round((pa&255)*(1-t)+(pb&255)*t);return"rgb("+r+","+g+","+bl+")";}
 
 // ============================ rules-vocabulary (styling only; NOT simulation) ============================
+// Each family carries a distinct MATERIAL identity so districts read apart at a
+// glance (game-rules §3). base = wall body; roof = default roof; trim = accent.
 const FAM = {
-  code:    {family:"residential", base:"#c96f4c", dist:"RESIDENTIAL"},
-  tests:   {family:"glass",       base:"#5fb8d6", dist:"GLASS QUARTER"},
-  infra:   {family:"industrial",  base:"#9aa0aa", dist:"INDUSTRY"},
-  api:     {family:"harbor",      base:"#4fc09a", dist:"HARBOR"},
-  research:{family:"library",     base:"#c9a86a", dist:"LIBRARY HILL"},
-  web:     {family:"observatory", base:"#6f7ad6", dist:"OBSERVATORY"},
-  planning:{family:"civic",       base:"#5f82d6", dist:"CITY HALL"},
+  code:    {family:"residential", base:"#c96f4c", roof:"#8a3a24", trim:"#e8c98a", dist:"RESIDENTIAL", chimney:true},
+  tests:   {family:"glass",       base:"#4aa6d8", roof:"#2b6f96", trim:"#bff0f4", dist:"GLASS QUARTER", chimney:false},
+  infra:   {family:"industrial",  base:"#9a4a34", roof:"#5a5650", trim:"#c9772f", dist:"INDUSTRY",     chimney:true},
+  api:     {family:"harbor",      base:"#a9723e", roof:"#6a4426", trim:"#e0b03a", dist:"HARBOR",       chimney:false},
+  research:{family:"library",     base:"#c3b48c", roof:"#7a6a44", trim:"#e6d9a8", dist:"LIBRARY HILL", chimney:false},
+  web:     {family:"observatory", base:"#5f6bc6", roof:"#33306a", trim:"#cbd0ff", dist:"OBSERVATORY",  chimney:false},
+  planning:{family:"civic",       base:"#cfc7ac", roof:"#3f66b0", trim:"#ffcf7a", dist:"CITY HALL",    chimney:false},
 };
 const TIERS=[0,25,90,250,700,1800];
 const TIER_H=[6,13,21,33,53,80];
@@ -291,7 +312,7 @@ function fold(list, upto){
       case "lot.decay":{ const l=lotById[d.id]; if(l) l.decay=d.level; break; }
       case "lot.renovate":{ const l=lotById[d.id]; if(l){l.decay=0;l.lastActiveDay=d.lastActiveDay;} break; }
       case "road.add":{ const r={id:d.id,path:d.path,tier:d.tier}; m.roads.push(r); roadById[d.id]=r; break; }
-      case "road.upgrade":{ const r=roadById[d.id]; if(r) r.tier=d.tier; break; }
+      case "road.upgrade":{ const r=roadById[d.id]; if(r){ r.tier=d.tier; if(d.path) r.path=d.path; } break; }  // top-tier avenues widen: path may grow
       case "rail.add": m.rails.push({between:d.between,path:d.path}); break;
       case "landmark.add": m.landmarks.push({kind:d.landmarkKind,pos:d.pos,day:d.day}); break;
       case "ship.arrive": m.stats.ships++; break;
@@ -313,7 +334,7 @@ function fold(list, upto){
 const CITY = window.__CITY__ || {model:null, deltas:[]};
 const DELTAS = (CITY.deltas||[]).slice().sort((a,b)=> (a.day-b.day)||(a.seq-b.seq));
 const MODEL = CITY.model || fold(DELTAS, 1e9);
-const MAX_DAY = CITY._MAX_DAY!=null ? CITY._MAX_DAY : (DELTAS.length? DELTAS[DELTAS.length-1].day : (MODEL.day||0));
+let MAX_DAY = CITY._MAX_DAY!=null ? CITY._MAX_DAY : (DELTAS.length? DELTAS[DELTAS.length-1].day : (MODEL.day||0));  // grows with live SSE deltas
 const SEED = MODEL.seed || "agentcity";
 
 // seed-chosen (Rule 6) palette / road style — atmosphere & uniqueness, not map state
@@ -326,18 +347,23 @@ function inGrid(x,y){ return x>=0&&y>=0&&x<GRID&&y<GRID; }
 let now=0, animate=!REDUCE;
 let chunkRevealAnim={};   // chunkKey -> wall-clock ms when it first appeared (fog recede)
 let seenChunks=new Set();
+let worldSeq=0, tileOrder=[], _drawKey="";   // rotation-aware painter order cache
 
 function buildWorld(m, isTimelapse){
   const w={ground:[],revealed:new Set(),revealDay:{},roadTierAt:{},roadSet:new Set(),roadTiles:[],
     lots:[],props:[],stakes:[],rails:m.rails||[],objs:[],fireworksSpots:[],
     origin:(m.biome&&m.biome.origin)||[25,25], dock:null, biome:m.biome};
-  for(let y=0;y<GRID;y++){w.ground[y]=[];for(let x=0;x<GRID;x++) w.ground[y][x]={t:((x+y)&1)?"grass":"grass2",elev:0};}
+  const hills=m.biome&&m.biome.kind==="hills";
+  for(let y=0;y<GRID;y++){w.ground[y]=[];for(let x=0;x<GRID;x++){
+    const hh=hashStr(SEED+"g"+x+"_"+y); let elev=0;
+    if(hills){ const n=(hashStr(SEED+"h"+((x/4)|0)+"_"+((y/4)|0))%1000)/1000; if(n>0.6) elev=Math.round((n-0.6)*24); }
+    w.ground[y][x]={t:((x+y)&1)?"grass":"grass2",elev, v:(hh%1000)/1000}; }}
   // water
-  if(m.biome&&m.biome.water) for(const [x,y] of m.biome.water) if(inGrid(x,y)) w.ground[y][x].t="water";
-  // sand rim around water
+  if(m.biome&&m.biome.water) for(const [x,y] of m.biome.water) if(inGrid(x,y)){ w.ground[y][x].t="water"; w.ground[y][x].elev=0; }
+  // sand rim around water (shore)
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ if(w.ground[y][x].t==="water") continue; let near=false;
     for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(inGrid(x+ox,y+oy)&&w.ground[y+oy][x+ox].t==="water") near=true;
-    if(near) w.ground[y][x].t="sand"; }
+    if(near){ w.ground[y][x].t="sand"; w.ground[y][x].elev=0; } }
   // revealed chunks (+ fog-recede animation bookkeeping)
   for(const c of m.chunks){ const k=c.x+","+c.y; w.revealed.add(k); w.revealDay[k]=c.revealedDay;
     if(!seenChunks.has(k)){ seenChunks.add(k); chunkRevealAnim[k]=(isTimelapse&&animate)? now : 0; } }
@@ -375,9 +401,7 @@ function buildWorld(m, isTimelapse){
     for(const [ox2,oy2] of [[1,0],[0,-1],[1,-1]]){ const nx=cx+ox2, ny=cy+oy2; if(nx<0||ny<0||nx>=GRIDCH||ny>=GRIDCH) continue;
       if(w.revealed.has(nx+","+ny)) continue; const sx=nx*CHUNK+3+((hashStr(k+nx+ny)%4)), sy=ny*CHUNK+3+((hashStr(k+ny+nx)%4));
       if(w.stakes.length<4 && !w.stakes.some(s=>s.tx===sx&&s.ty===sy)) w.stakes.push({tx:sx,ty:sy}); } }
-  // depth sort (painter back-to-front)
-  for(const o of w.objs) o.depth=o.tx+o.ty;
-  w.objs.sort((a,b)=> (a.depth+((a.h||0)*0.001)) - (b.depth+((b.h||0)*0.001)));
+  w._id=++worldSeq;
   return w;
 }
 
@@ -393,25 +417,33 @@ let dirty=true;
 // ============================ DAY / DELTA CROSSING ============================
 function foundedDate(){ const d=new Date(MODEL.foundedTs+"T12:00:00"); return isNaN(d)? new Date() : d; }
 function displayDate(){ if(mode==="timelapse"){ const d=new Date(foundedDate()); d.setDate(d.getDate()+curDay); return d; } return new Date(); }
-function constructMs(){ return tl.speed>=50?900 : tl.speed>=10?2000 : 6000; }
+// timelapse compresses the whole rise into ~2s beat; live view plays it over the
+// visible construction window (~30s+ per game-rules §3).
+function constructMs(){ if(mode==="live") return 32000; return tl.speed>=50?900 : tl.speed>=10?2000 : 6000; }
+function beginBuild(o,fromTier){ const ms=constructMs(); o.constructing=ms; o.constructMax=ms;
+  o.constructFrom=(fromTier>0 && o.tier>fromTier)? (TIER_H[fromTier]/TIER_H[o.tier]) : 0; }
 
 function onDeltaCrossed(d){
-  if(d.kind==="lot.found"){ const o=world.lots.find(l=>l.id===d.id); if(o){o.constructing=constructMs();} showToast(d.repo,"new repo founded"); }
-  else if(d.kind==="lot.upgrade"){ const o=world.lots.find(l=>l.id===d.id); if(o) o.constructing=constructMs(); }
+  if(d.kind==="lot.found"){ const o=world.lots.find(l=>l.id===d.id); if(o) beginBuild(o,0); showToast(d.repo,"new repo founded"); }
+  else if(d.kind==="lot.upgrade"){ const o=world.lots.find(l=>l.id===d.id); if(o) beginBuild(o,Math.max(0,d.tier-1)); }
   else if(d.kind==="ship.arrive"){ spawnShip(); }
   else if(d.kind==="landmark.add"){ const t={plaque:"plaque laid",fountain:"fountain raised",statue:"statue erected","fireworks-spot":"fireworks!"}[d.landmarkKind]||"milestone"; showToast(t,"milestone"); if(d.landmarkKind==="fireworks-spot") launchFireworks(d.pos); }
 }
+// carry in-progress construction (and flicker) across a world rebuild so the
+// rise keeps animating instead of resetting each day.
+function carryBuild(prevLots){ if(!prevLots) return; const by={}; for(const l of prevLots) by[l.id]=l;
+  for(const o of world.lots){ const p=by[o.id]; if(p&&p.constructing>0&&p.tier===o.tier){ o.constructing=p.constructing; o.constructMax=p.constructMax; o.constructFrom=p.constructFrom; } if(p) o._flickerUntil=p._flickerUntil; } }
 function setDay(nd, replayFx){
   nd=Math.max(0,Math.min(MAX_DAY,Math.round(nd)));
   if(nd===curDay){ return; }
   const forward=nd>curDay;
-  const prev=curDay;
-  curDay=nd; M=fold(DELTAS,curDay); world=buildWorld(M, mode==="timelapse");
+  const prev=curDay, prevLots=world&&world.lots;
+  curDay=nd; M=fold(DELTAS,curDay); world=buildWorld(M, mode==="timelapse"); carryBuild(prevLots);
   syncCitizens(M.stats.population, M.stats.pets, M.stats.allNighterYesterday);
   if(replayFx && forward && animate){ for(const d of DELTAS) if(d.day>prev && d.day<=nd) onDeltaCrossed(d); }
   dirty=true;
 }
-function rebuild(){ M=fold(DELTAS,curDay); world=buildWorld(M, mode==="timelapse"); syncCitizens(M.stats.population,M.stats.pets,M.stats.allNighterYesterday); dirty=true; }
+function rebuild(){ const prevLots=world&&world.lots; M=fold(DELTAS,curDay); world=buildWorld(M, mode==="timelapse"); carryBuild(prevLots); syncCitizens(M.stats.population,M.stats.pets,M.stats.allNighterYesterday); dirty=true; }
 
 // ============================ CITIZENS / PETS (ambient life; counts from stats) ============================
 const PALS=[["#c85a4a","#3a3550"],["#4a80c8","#2f2a40"],["#e0b040","#4a4030"],["#5aa06a","#2f3436"],["#b070c0","#3a2f4a"],["#d0d0c0","#4a4a52"],["#e08a50","#40342a"],["#7fb0b0","#2f3440"]];
@@ -479,66 +511,221 @@ function cornersFor(tx,ty,fw,fd,hPx,elev,proj,s){ const T=gridIso(tx,ty),R=gridI
 function faceWindows(g,A,B,h,cols,rows,litFn,litCol,offCol){ const dx=(B.x-A.x),dy=(B.y-A.y), mx=0.14,my=0.12; const gw=(1-2*mx)/cols, gh=(1-2*my)/rows, ww=gw*0.6, wh=gh*0.55;
   for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){ const u0=mx+c*gw+(gw-ww)/2, v0=my+r*gh+(gh-wh)/2, on=litFn(c,r); const p=(u,v)=>({x:A.x+dx*u, y:A.y+dy*u-h*v}); poly(g,[p(u0,v0),p(u0+ww,v0),p(u0+ww,v0+wh),p(u0,v0+wh)], on?litCol:offCol); } }
 
-// unified building painter (tiers 0..5, family ornaments, decay, scaffold)
-function paintBox(g,o,C,s,night){
-  const base=o.info.base, fam=o.info.family, tier=o.tier;
-  const dim=o.decay===2?0.6:o.decay===1?0.78:1;
-  if(tier===0){ const cx=(C.gT.x+C.gB.x)/2, by=(C.gB.y+C.gT.y)/2, th=TIER_H[0]*s;
-    poly(g,[{x:cx,y:by-th},{x:C.gR.x,y:C.gR.y},{x:cx,y:C.gB.y}],shade(base,1.0*dim));
-    poly(g,[{x:cx,y:by-th},{x:C.gL.x,y:C.gL.y},{x:cx,y:C.gB.y}],shade(base,0.62*dim));
-    poly(g,[{x:cx,y:by-th},{x:C.gL.x,y:C.gL.y},{x:C.gR.x,y:C.gR.y}],shade(base,1.25*dim)); return; }
-  let topC,rightC,leftC;
-  if(fam==="glass"){ topC=shade(base,1.55*dim); rightC=shade(base,1.02*dim); leftC=shade(base,0.62*dim); }
-  else { topC=shade(base,1.35*dim); rightC=shade(base,0.95*dim); leftC=shade(base,0.6*dim); }
-  poly(g,[C.gL,C.gB,C.tB,C.tL],leftC,"rgba(0,0,0,.35)");
-  poly(g,[C.gB,C.gR,C.tR,C.tB],rightC,"rgba(0,0,0,.25)");
-  poly(g,[C.tT,C.tR,C.tB,C.tL],topC,"rgba(0,0,0,.2)");
-  const litOn=night>0.4; const litCol=o.decay?"#3a3020":"#ffd98a", offCol=shade(base,0.42*dim);
-  const cols=Math.max(2,tier+1), rows=Math.max(2,Math.floor(TIER_H[tier]/11));
-  const litFn=(c,r)=>{ if(o.decay===2) return false; let b=((c*3+r*5+o.seed)%5)<(litOn?3:1); if(o.decay===1) b=b&&((c+r)%2===0); return b; };
-  faceWindows(g,C.gL,C.gB,C.h,cols,rows,litFn,litCol,offCol);
-  faceWindows(g,C.gB,C.gR,C.h,cols,rows,(c,r)=>litFn(c+7,r),litCol,offCol);
-  const cx=(C.tT.x+C.tB.x)/2, cy=(C.tT.y+C.tB.y)/2;
-  if(fam==="residential"){ const rh=(tier>=4?7:5)*s;
-    poly(g,[{x:cx,y:cy-rh},C.tR,C.tB],shade(pal.roof,1.05)); poly(g,[{x:cx,y:cy-rh},C.tL,C.tB],shade(pal.roof,0.7));
-    poly(g,[{x:cx,y:cy-rh},C.tT,C.tL],shade(pal.roof,0.9)); poly(g,[{x:cx,y:cy-rh},C.tT,C.tR],shade(pal.roof,1.15)); }
-  else if(fam==="glass"){ poly(g,[C.tT,C.tR,C.tB,C.tL],"rgba(127,227,224,.20)"); if(tier>=4) o._beacon={x:cx,y:cy-2*s}; }
-  else if(fam==="industrial"){ if(tier>=3){ const sx=(C.tT.x+C.tR.x)/2, sy=(C.tT.y+C.tR.y)/2; g.fillStyle="#5a5650"; g.fillRect(sx-1.5*s,sy-9*s,3*s,10*s); g.fillStyle="#8a3a2a"; g.fillRect(sx-1.5*s,sy-10*s,3*s,1.5*s); o._smoke={x:sx,y:sy-10*s}; } }
-  else if(fam==="harbor"){ g.fillStyle="#8a6a3a"; g.fillRect(C.gB.x-3*s,C.gB.y-3*s,3*s,3*s); g.fillStyle="#9a7a4a"; g.fillRect(C.gB.x,C.gB.y-4*s,3*s,3*s);
-    if(tier>=3){ g.strokeStyle="#e0b03a"; g.lineWidth=1.2*s; g.beginPath(); g.moveTo(cx,cy); g.lineTo(cx,cy-8*s); g.lineTo(cx+6*s,cy-7*s); g.stroke(); } }
-  else if(fam==="library"){ if(tier>=2){ const rh=4*s; poly(g,[{x:cx,y:cy-rh},C.tR,C.tB],shade(base,1.1)); poly(g,[{x:cx,y:cy-rh},C.tL,C.tB],shade(base,0.8)); }
-    g.fillStyle=shade(base,1.3); const dx=(C.gB.x-C.gL.x)/4, dy=(C.gB.y-C.gL.y)/4; for(let i=0;i<=3;i++) g.fillRect(C.gL.x+dx*i-0.6*s,C.gL.y+dy*i-C.h*0.5,1.2*s,C.h*0.5); }
-  else if(fam==="observatory"){ if(tier>=2){ g.fillStyle=shade(base,1.3); g.beginPath(); g.arc(cx,cy,(tier>=4?7:5)*s,Math.PI,0); g.fill(); g.fillStyle="#e0d8ff"; g.fillRect(cx-0.7*s,cy-(tier>=4?7:5)*s,1.4*s,3*s); } }
-  else if(fam==="civic"){ if(tier>=2){ g.fillStyle="#2f5fa0"; g.fillRect(cx-3*s,cy-3*s,3*s,3*s); g.fillStyle="#dfe8ff"; g.fillRect(cx-2.6*s,cy-2.6*s,0.9*s,2*s); g.fillStyle="#8a7a52"; g.fillRect(cx+2*s,cy-6*s,0.7*s,6*s); g.fillStyle=pal.accent; g.fillRect(cx+2.7*s,cy-6*s,3*s,2*s); } }
-  // secondary-category ornament (§3 mixed repos): a small glass atrium/skylight
-  if(o.secondary){ g.fillStyle="rgba(127,227,224,.55)"; g.fillRect(cx-1.4*s, cy-1.4*s, 2.8*s, 2.8*s); }
-  // tier-5 landmark crown
-  if(tier>=5){
-    if(fam==="residential"||fam==="civic"){ g.fillStyle=pal.accent; g.fillRect(cx-1*s,cy-14*s,2*s,14*s); g.beginPath(); g.arc(cx,cy-15*s,2*s,0,7); g.fill(); }
-    else if(fam==="glass"){ g.fillStyle=shade(base,1.6); poly(g,[{x:cx,y:cy-16*s},{x:cx+3*s,y:cy},{x:cx-3*s,y:cy}]); }
-    else if(fam==="observatory"||fam==="library"){ g.fillStyle=shade(base,1.4); g.beginPath(); g.arc(cx,cy,8*s,Math.PI,0); g.fill(); g.fillStyle=pal.accent; g.beginPath(); g.arc(cx,cy-8*s,1.6*s,0,7); g.fill(); }
-    else if(fam==="harbor"){ g.fillStyle="#d8d2c4"; g.fillRect(cx-2*s,cy-14*s,4*s,14*s); g.fillStyle="#c0402f"; g.fillRect(cx-2*s,cy-11*s,4*s,2*s); o._beacon={x:cx,y:cy-15*s}; }
-    else { g.fillStyle="#5a5650"; g.fillRect(cx-2*s,cy-16*s,4*s,16*s); o._smoke={x:cx,y:cy-16*s}; }
+// stroke a set of lines across a face (A=near-ground, B=far-ground, h=height px)
+// horiz=true -> courses (brick/stone bands); false -> mullions/planks
+function faceLines(g,A,B,h,horiz,count,col,lw){ const dx=B.x-A.x,dy=B.y-A.y; g.strokeStyle=col; g.lineWidth=lw||1;
+  if(horiz){ for(let i=1;i<count;i++){ const v=i/count; g.beginPath(); g.moveTo(A.x,A.y-h*v); g.lineTo(B.x,B.y-h*v); g.stroke(); } }
+  else { for(let i=1;i<count;i++){ const u=i/count; g.beginPath(); g.moveTo(A.x+dx*u,A.y+dy*u); g.lineTo(A.x+dx*u,A.y+dy*u-h); g.stroke(); } } }
+
+// tier-0 survey stake + canvas tent (charming, category-tinted pennant)
+function drawTent(g,o,C,s,cx,cy){ const trim=o.info.trim;
+  g.fillStyle="rgba(0,0,0,.24)"; g.beginPath(); g.ellipse(cx,cy,6*s,2.6*s,0,0,7); g.fill();
+  const apex={x:cx,y:cy-9*s}, bl={x:cx-6*s,y:cy}, br={x:cx+6*s,y:cy};
+  poly(g,[apex,br,bl],"#d9cdaa");                                  // sunlit canvas
+  poly(g,[apex,br,{x:cx+3*s,y:cy}],"#b6aa87");                     // shaded flap
+  g.strokeStyle="#8a7f60"; g.lineWidth=Math.max(1,s*0.5); g.beginPath(); g.moveTo(apex.x,apex.y); g.lineTo(cx,cy); g.stroke();
+  poly(g,[{x:cx,y:cy-4.6*s},{x:cx-2.3*s,y:cy},{x:cx+2.3*s,y:cy}],"#372f20"); // door
+  g.fillStyle=trim; g.fillRect(cx-6*s,cy-0.6*s,12*s,1.2*s);        // seam stripe (district color)
+  g.strokeStyle="#6a5f45"; g.beginPath(); g.moveTo(apex.x,apex.y); g.lineTo(apex.x,apex.y-4*s); g.stroke();
+  poly(g,[{x:apex.x,y:apex.y-4*s},{x:apex.x+3.4*s,y:apex.y-3*s},{x:apex.x,y:apex.y-1.5*s}],trim); }
+
+// tier-1 charming hut (short walls, pitched roof, door, warm window, chimney).
+// hf<1 & !roofShown => walls still rising (roof placed last).
+function drawHut(g,o,C,s,cx,cy,dim,night,hf,roofShown){ if(hf==null)hf=1; if(roofShown==null)roofShown=true;
+  const base=o.info.base, roofC=o.info.roof, wallH=9*s*hf;
+  const tL={x:C.gL.x,y:C.gL.y-wallH}, tB={x:C.gB.x,y:C.gB.y-wallH}, tR={x:C.gR.x,y:C.gR.y-wallH}, tT={x:C.gT.x,y:C.gT.y-wallH};
+  poly(g,[C.gL,C.gB,tB,tL],shade(base,0.62*dim),"rgba(0,0,0,.35)");
+  poly(g,[C.gB,C.gR,tR,tB],shade(base,0.98*dim),"rgba(0,0,0,.25)");
+  poly(g,[tT,tR,tB,tL],shade(base,1.15*dim),"rgba(0,0,0,.2)");
+  const rc=(u,v)=>({x:C.gB.x+(C.gR.x-C.gB.x)*u,y:C.gB.y+(C.gR.y-C.gB.y)*u-wallH*v});
+  poly(g,[rc(0.36,0),rc(0.62,0),rc(0.62,0.62),rc(0.36,0.62)], o.decay?"#241f14":"#4a3826"); // door
+  const lc=(u,v)=>({x:C.gL.x+(C.gB.x-C.gL.x)*u,y:C.gL.y+(C.gB.y-C.gL.y)*u-wallH*v});
+  poly(g,[lc(0.4,0.32),lc(0.64,0.32),lc(0.64,0.6),lc(0.4,0.6)], (night>0.4&&!o.decay)?"#ffd98a":shade(base,0.4)); // window
+  if(roofShown){ const rApex={x:cx,y:cy-wallH-6*s};              // pitched hip roof placed last
+    poly(g,[rApex,tR,tB],shade(roofC,1.12)); poly(g,[rApex,tB,tL],shade(roofC,0.78));
+    poly(g,[rApex,tL,tT],shade(roofC,0.94)); poly(g,[rApex,tT,tR],shade(roofC,1.2));
+    if(o.info.chimney){ const chx=cx+3*s, chy=cy-wallH-3*s; g.fillStyle=shade(roofC,0.7); g.fillRect(chx-1*s,chy-2*s,2*s,4*s); o._chimney={x:chx,y:chy-2*s}; }
+    o._roofTop={x:cx,y:rApex.y-1*s}; }
+  else o._roofTop={x:cx,y:cy-wallH-2*s};
+  drawDecay(g,o,{gL:C.gL,gB:C.gB,gR:C.gR},s,wallH); }
+
+// organic pixel vines (decay 1) + branching cracks (decay 2)
+function drawDecay(g,o,C,s,h){ if(!o.decay) return; const seed=o.seed, faces=[[C.gL,C.gB],[C.gB,C.gR]];
+  g.lineWidth=Math.max(1,s*0.5);
+  for(let f=0;f<faces.length;f++){ const [A,B]=faces[f], dx=B.x-A.x, dy=B.y-A.y, stems=2+((seed>>f)&1);
+    for(let k=0;k<stems;k++){ const u0=0.15+((seed*7+k*29+f*13)%60)/100*0.7, climb=0.5+((seed+k*17)%45)/100*0.45;
+      g.strokeStyle="#356f30"; g.beginPath(); const steps=7;
+      for(let i=0;i<=steps;i++){ const v=climb*i/steps, u=u0+Math.sin(i*1.4+seed+k)*0.028, px=A.x+dx*u, py=A.y+dy*u-h*v;
+        if(i===0)g.moveTo(px,py); else g.lineTo(px,py); }
+      g.stroke();
+      for(let i=1;i<=steps;i+=2){ const v=climb*i/steps, u=u0+Math.sin(i*1.4+seed+k)*0.028, px=A.x+dx*u, py=A.y+dy*u-h*v;
+        g.fillStyle=(i%4===1)?"#4f9a48":"#2f7030"; g.fillRect(px-0.9*s,py-0.9*s,1.8*s,1.8*s); } } }
+  if(o.decay>=2){ g.strokeStyle="rgba(10,8,6,.55)"; g.lineWidth=Math.max(1,s*0.6);
+    for(let f=0;f<faces.length;f++){ const [A,B]=faces[f], dx=B.x-A.x, dy=B.y-A.y, u0=0.35+((seed*3+f*11)%30)/100;
+      let x=A.x+dx*u0, y=A.y+dy*u0-h*0.06; g.beginPath(); g.moveTo(x,y);
+      for(let i=1;i<=5;i++){ x+=Math.sin(seed+i*2.1+f)*2*s; y-=h*0.15; g.lineTo(x,y); } g.stroke();
+      g.beginPath(); g.moveTo(A.x+dx*u0,A.y+dy*u0-h*0.32); g.lineTo(A.x+dx*u0+2.6*s,A.y+dy*u0-h*0.44); g.stroke(); } } }
+
+// secondary-category ornament: a raised GLASS SKYLIGHT (iso pixel box) — not a flat quad
+function drawSkylight(g,o,C,s,cx,cy){ const sz=2.7*s, hh=2.3*s;
+  const bl={x:cx-sz,y:cy}, bf={x:cx,y:cy+sz*0.5}, br={x:cx+sz,y:cy}, bb={x:cx,y:cy-sz*0.5};
+  poly(g,[bl,bf,{x:bf.x,y:bf.y-hh},{x:bl.x,y:bl.y-hh}],"rgba(90,180,190,.9)","rgba(20,60,70,.6)");
+  poly(g,[bf,br,{x:br.x,y:br.y-hh},{x:bf.x,y:bf.y-hh}],"rgba(120,210,220,.92)","rgba(20,60,70,.6)");
+  poly(g,[{x:bl.x,y:bl.y-hh},{x:bf.x,y:bf.y-hh},{x:br.x,y:br.y-hh},{x:bb.x,y:bb.y-hh}],"rgba(180,240,244,.95)","rgba(20,60,70,.5)");
+  g.strokeStyle="rgba(20,60,70,.5)"; g.lineWidth=Math.max(1,s*0.4); g.beginPath(); g.moveTo(bb.x,bb.y-hh); g.lineTo(bf.x,bf.y-hh); g.stroke(); }
+
+// tier-5 landmark crown, per family
+function paintCrown(g,o,C,s,cx,cy){ const fam=o.info.family, base=o.info.base, trim=o.info.trim;
+  if(fam==="residential"||fam==="civic"){ g.fillStyle=trim; g.fillRect(cx-1*s,cy-14*s,2*s,14*s); g.beginPath(); g.arc(cx,cy-15*s,2*s,0,7); g.fill(); o._roofTop={x:cx,y:cy-15*s}; }
+  else if(fam==="glass"){ g.fillStyle=shade(base,1.6); poly(g,[{x:cx,y:cy-16*s},{x:cx+3*s,y:cy},{x:cx-3*s,y:cy}]); o._beacon={x:cx,y:cy-16*s}; o._roofTop={x:cx,y:cy-16*s}; }
+  else if(fam==="observatory"||fam==="library"){ g.fillStyle=shade(base,1.4); g.beginPath(); g.arc(cx,cy,8*s,Math.PI,0); g.fill(); g.fillStyle=trim; g.beginPath(); g.arc(cx,cy-8*s,1.6*s,0,7); g.fill(); o._roofTop={x:cx,y:cy-9*s}; }
+  else if(fam==="harbor"){ g.fillStyle="#d8d2c4"; g.fillRect(cx-2*s,cy-14*s,4*s,14*s); g.fillStyle="#c0402f"; g.fillRect(cx-2*s,cy-11*s,4*s,2*s); o._beacon={x:cx,y:cy-15*s}; o._roofTop={x:cx,y:cy-15*s}; }
+  else { g.fillStyle="#5a5650"; g.fillRect(cx-2*s,cy-16*s,4*s,16*s); o._smoke={x:cx,y:cy-16*s}; o._chimney={x:cx,y:cy-16*s}; o._roofTop={x:cx,y:cy-16*s}; } }
+
+// ---- rising-construction staging (never roof-first) ----
+// A building under construction plays: dirt/foundation -> walls rising floor by
+// floor -> roof placed last -> scaffold removed. buildStage() maps the ms
+// countdown to a progress and the current stage. Upgrades start from the
+// previous tier's height (o.constructFrom, a 0..1 fraction) so the new floors
+// visibly grow on top of the existing structure.
+function buildStage(o){
+  if(!(o.constructing>0)||!(o.constructMax>0)||!animate){
+    // reduced-motion or done: final state, but honor a persisted underConstruction flag (show scaffold, full walls)
+    const scaf=(!animate)&&o.underConstruction;
+    return {bp:1,hf:1,foundation:false,roofShown:true,scaffold:scaf};
   }
-  if(o.decay>=1){ g.fillStyle="#3f7a3a"; for(let i=0;i<8;i++){ const u=((o.seed*7+i*13)%100)/100, v=(i*17%100)/100; g.fillRect(C.gL.x+(C.gB.x-C.gL.x)*u,C.gL.y+(C.gB.y-C.gL.y)*u-C.h*v,1.6*s,2.4*s); } }
-  if(o.decay>=2){ g.strokeStyle="rgba(0,0,0,.5)"; g.lineWidth=Math.max(1,s*0.5); g.beginPath(); g.moveTo(C.tB.x,C.tB.y); g.lineTo(C.gB.x-2*s,C.gB.y-3*s); g.stroke(); }
-  if(o.constructing>0){ g.strokeStyle="#caa24a"; g.lineWidth=1; g.strokeRect(C.tL.x,C.tT.y,(C.tR.x-C.tL.x),(C.gB.y-C.tT.y));
-    g.strokeStyle="#e0b03a"; g.lineWidth=1.2*s; g.beginPath(); g.moveTo(C.gR.x+1*s,C.gR.y); g.lineTo(C.gR.x+1*s,C.tR.y-6*s); g.lineTo(cx,C.tT.y-6*s); g.stroke(); }
+  const bp=Math.max(0,Math.min(1,1-o.constructing/o.constructMax));
+  const from=Math.max(0,Math.min(0.9,o.constructFrom||0));
+  if(bp<0.12) return {bp,hf:from,foundation:true,roofShown:false,scaffold:true};
+  const t=(bp-0.12)/(0.82-0.12), ct=Math.max(0,Math.min(1,t)), sm=ct*ct*(3-2*ct);
+  const hf=from+(1-from)*sm;
+  return {bp,hf,foundation:false,roofShown:bp>=0.82,scaffold:bp<0.98};
+}
+// interpolate the top corners of C to a height fraction hf (0=flat ground,1=full)
+function topCorners(C,hf){ return { gT:C.gT,gR:C.gR,gB:C.gB,gL:C.gL, h:C.h*hf,
+  tT:{x:C.tT.x,y:C.gT.y+(C.tT.y-C.gT.y)*hf}, tR:{x:C.tR.x,y:C.gR.y+(C.tR.y-C.gR.y)*hf},
+  tB:{x:C.tB.x,y:C.gB.y+(C.tB.y-C.gB.y)*hf}, tL:{x:C.tL.x,y:C.gL.y+(C.tL.y-C.gL.y)*hf} }; }
+function drawFoundation(g,C,s){ const hh=2.2*s, tT={x:C.gT.x,y:C.gT.y-hh},tR={x:C.gR.x,y:C.gR.y-hh},tB={x:C.gB.x,y:C.gB.y-hh},tL={x:C.gL.x,y:C.gL.y-hh};
+  poly(g,[C.gL,C.gB,tB,tL],"#464038"); poly(g,[C.gB,C.gR,tR,tB],"#565049"); poly(g,[tT,tR,tB,tL],"#6a655c","rgba(0,0,0,.3)");
+  g.fillStyle="#4a4632"; const cxo=(C.gT.x+C.gB.x)/2; g.fillRect(cxo-0.5*s,tT.y-4*s,1*s,4*s); }  // a survey peg on the pad
+// scaffold frame drawn to the TARGET envelope C (full height) so it frames the finished form
+function drawScaffold(g,C,s){ g.strokeStyle="#caa24a"; g.lineWidth=Math.max(1,s*0.5);
+  [[C.gL,C.tL],[C.gB,C.tB],[C.gR,C.tR],[C.gT,C.tT]].forEach(([a,b])=>{ g.beginPath(); g.moveTo(a.x,a.y); g.lineTo(b.x,b.y); g.stroke(); });
+  for(let k=1;k<=3;k++){ const v=k/4, p=(a,b)=>({x:a.x,y:a.y+(b.y-a.y)*v});
+    const L=p(C.gL,C.tL),B=p(C.gB,C.tB),R=p(C.gR,C.tR),T=p(C.gT,C.tT);
+    g.beginPath(); g.moveTo(L.x,L.y); g.lineTo(B.x,B.y); g.lineTo(R.x,R.y); g.stroke();
+    g.beginPath(); g.moveTo(T.x,T.y); g.lineTo(B.x,B.y); g.stroke(); }
+  const cx=(C.tT.x+C.tB.x)/2; g.strokeStyle="#e0b03a"; g.lineWidth=1.2*s;
+  g.beginPath(); g.moveTo(C.gR.x+2*s,C.gR.y); g.lineTo(C.gR.x+2*s,C.tR.y-8*s); g.lineTo(cx,C.tT.y-8*s); g.stroke();
+  g.fillStyle="#e0b03a"; g.fillRect(cx-0.8*s,C.tT.y-8*s,1.6*s,2*s); }
+
+// unified building painter (tiers 0..5, per-family MATERIAL identity, decay, scaffold)
+function paintBox(g,o,C,s,night){
+  const info=o.info, base=info.base, fam=info.family, tier=o.tier;
+  const dim=o.decay===2?0.58:o.decay===1?0.8:1;
+  const cxG=(C.gT.x+C.gB.x)/2, cyG=(C.gT.y+C.gB.y)/2;
+  o._roofTop=null; o._chimney=null; o._smoke=null; o._beacon=null;
+  o._flicker=animate&&(o._flickerUntil||0)>now;   // live Edit/Write presence flicker
+  if(tier<0||tier>5||!FAM[o.category]) unknownSprites++;
+  const st=buildStage(o);
+  if(tier<=0){ if(st.foundation) drawFoundation(g,C,s); else drawTent(g,o,C,s,cxG,cyG); o._roofTop={x:cxG,y:cyG-14*s}; if(st.scaffold) drawScaffold(g,C,s); return; }
+  if(tier===1){ if(st.foundation){ drawFoundation(g,C,s); o._roofTop={x:cxG,y:cyG-6*s}; } else drawHut(g,o,C,s,cxG,cyG,dim,night,st.hf,st.roofShown); if(st.scaffold) drawScaffold(g,C,s); return; }
+  if(st.foundation){ drawFoundation(g,C,s); drawScaffold(g,C,s); o._roofTop={x:cxG,y:cyG-6*s}; return; }
+
+  const Cc=st.hf<1? topCorners(C,st.hf):C;   // walls rising floor-by-floor (roof placed last)
+  const H=Cc.h, glass=fam==="glass";
+  let topC,rightC,leftC;
+  if(glass){ topC=shade(base,1.5*dim); rightC=shade(base,1.08*dim); leftC=shade(base,0.66*dim); }
+  else if(fam==="library"||fam==="civic"){ topC=shade(base,1.2*dim); rightC=shade(base,0.98*dim); leftC=shade(base,0.72*dim); }
+  else { topC=shade(base,1.34*dim); rightC=shade(base,0.94*dim); leftC=shade(base,0.6*dim); }
+  poly(g,[Cc.gL,Cc.gB,Cc.tB,Cc.tL],leftC,"rgba(0,0,0,.38)");
+  poly(g,[Cc.gB,Cc.gR,Cc.tR,Cc.tB],rightC,"rgba(0,0,0,.28)");
+  poly(g,[Cc.tT,Cc.tR,Cc.tB,Cc.tL],topC,"rgba(0,0,0,.22)");
+  const cx=(Cc.tT.x+Cc.tB.x)/2, cy=(Cc.tT.y+Cc.tB.y)/2;
+
+  // material texture on the two visible faces
+  if(fam==="industrial"){ faceLines(g,Cc.gL,Cc.gB,H,true,Math.max(3,tier+2),"rgba(0,0,0,.22)",Math.max(1,s*0.4)); faceLines(g,Cc.gB,Cc.gR,H,true,Math.max(3,tier+2),"rgba(0,0,0,.18)",Math.max(1,s*0.4)); }
+  else if(fam==="harbor"){ faceLines(g,Cc.gL,Cc.gB,H,false,Math.max(3,tier+2),"rgba(0,0,0,.24)",Math.max(1,s*0.4)); faceLines(g,Cc.gB,Cc.gR,H,false,Math.max(3,tier+2),"rgba(0,0,0,.2)",Math.max(1,s*0.4)); }
+  else if(fam==="library"){ faceLines(g,Cc.gL,Cc.gB,H,true,3,"rgba(0,0,0,.14)",Math.max(1,s*0.4)); faceLines(g,Cc.gB,Cc.gR,H,true,3,"rgba(0,0,0,.12)",Math.max(1,s*0.4)); }
+
+  // windows
+  const litOn=night>0.4;
+  const litCol=o.decay?"#3a3020":(glass?"#bff0f4":info.trim);
+  const offCol=glass?shade(base,0.82):shade(base,0.42*dim);
+  const cols=glass?Math.max(3,tier+2):Math.max(2,tier);
+  const rows=Math.max(2,Math.floor((TIER_H[tier]*st.hf)/(glass?9:12)));
+  const litFn=(c,r)=>{ if(o.decay===2) return false; if(o._flicker&&((c+r+((now/90)|0))%3===0)) return true; let b=((c*3+r*5+o.seed)%5)<(litOn?(glass?4:3):(glass?2:1)); if(o.decay===1) b=b&&((c+r)%2===0); return b; };
+  faceWindows(g,Cc.gL,Cc.gB,H,cols,rows,litFn,litCol,offCol);
+  faceWindows(g,Cc.gB,Cc.gR,H,cols,rows,(c,r)=>litFn(c+7,r),litCol,offCol);
+  if(glass){ faceLines(g,Cc.gL,Cc.gB,H,false,cols,"rgba(20,60,70,.5)",Math.max(1,s*0.4)); faceLines(g,Cc.gB,Cc.gR,H,false,cols,"rgba(20,60,70,.5)",Math.max(1,s*0.4)); poly(g,[Cc.tT,Cc.tR,Cc.tB,Cc.tL],"rgba(150,235,240,.16)"); }
+
+  // family crowns / roofs — only once walls have topped out (roof placed LAST)
+  o._roofTop={x:cx,y:cy};
+  if(st.roofShown){
+  if(fam==="residential"){ const rh=(tier>=4?8:6)*s, rc=[info.roof,pal.roof,"#5a4a7a","#3a5a7a"][o.seed%4];
+    poly(g,[{x:cx,y:cy-rh},Cc.tR,Cc.tB],shade(rc,1.1)); poly(g,[{x:cx,y:cy-rh},Cc.tL,Cc.tB],shade(rc,0.72));
+    poly(g,[{x:cx,y:cy-rh},Cc.tT,Cc.tL],shade(rc,0.92)); poly(g,[{x:cx,y:cy-rh},Cc.tT,Cc.tR],shade(rc,1.2)); o._roofTop={x:cx,y:cy-rh};
+    if(info.chimney){ const chx=Cc.tT.x*0.3+Cc.tR.x*0.7, chy=Cc.tT.y*0.3+Cc.tR.y*0.7-2*s; g.fillStyle=shade(rc,0.65); g.fillRect(chx-1*s,chy-3*s,2*s,4*s); o._chimney={x:chx,y:chy-3*s}; } }
+  else if(fam==="glass"){ if(tier>=4){ g.fillStyle=shade(base,1.7); g.fillRect(cx-1.2*s,cy-6*s,2.4*s,6*s); o._beacon={x:cx,y:cy-6*s}; o._roofTop={x:cx,y:cy-6*s}; } }
+  else if(fam==="industrial"){ g.fillStyle="rgba(0,0,0,.25)"; g.fillRect(cx-6*s,cy-1*s,12*s,1.4*s);
+    if(tier>=3){ const sx=(Cc.tT.x+Cc.tR.x)/2, sy=(Cc.tT.y+Cc.tR.y)/2; g.fillStyle="#5a5650"; g.fillRect(sx-1.6*s,sy-11*s,3.2*s,11*s); g.fillStyle="#8a3a2a"; g.fillRect(sx-1.6*s,sy-12*s,3.2*s,1.6*s); o._smoke={x:sx,y:sy-12*s}; o._chimney={x:sx,y:sy-12*s}; o._roofTop={x:cx,y:sy-12*s};
+      g.strokeStyle=info.trim; g.lineWidth=Math.max(1,s*0.7); g.beginPath(); g.moveTo(Cc.tL.x,Cc.tL.y); g.lineTo(cx,cy-3*s); g.stroke(); } }
+  else if(fam==="harbor"){ g.fillStyle="#8a6a3a"; g.fillRect(Cc.gB.x-3*s,Cc.gB.y-3*s,3*s,3*s); g.fillStyle="#9a7a4a"; g.fillRect(Cc.gB.x,Cc.gB.y-4*s,3*s,3*s); g.strokeStyle="rgba(0,0,0,.3)"; g.strokeRect(Cc.gB.x-3*s,Cc.gB.y-3*s,3*s,3*s);
+    if(tier>=3){ g.strokeStyle=info.trim; g.lineWidth=Math.max(1,s*0.9); g.beginPath(); g.moveTo(cx,cy); g.lineTo(cx,cy-9*s); g.lineTo(cx+7*s,cy-8*s); g.stroke(); g.fillStyle=info.trim; g.fillRect(cx+6.4*s,cy-8*s,1.4*s,3*s); o._roofTop={x:cx,y:cy-9*s}; } }
+  else if(fam==="library"){ const dx=(Cc.gB.x-Cc.gL.x)/4, dy=(Cc.gB.y-Cc.gL.y)/4; g.fillStyle=shade(base,1.32); for(let i=0;i<=3;i++) g.fillRect(Cc.gL.x+dx*i-0.6*s,Cc.gL.y+dy*i-H*0.5,1.2*s,H*0.5);
+    if(tier>=2){ const dr=(tier>=4?7:5)*s; g.fillStyle=shade(base,1.25); g.beginPath(); g.arc(cx,cy,dr,Math.PI,0); g.fill(); g.strokeStyle="rgba(0,0,0,.25)"; g.stroke(); g.fillStyle=info.trim; g.fillRect(cx-0.7*s,cy-dr,1.4*s,2*s); o._roofTop={x:cx,y:cy-dr}; } }
+  else if(fam==="observatory"){ if(tier>=2){ const dr=(tier>=4?8:6)*s; g.fillStyle=shade(base,1.35); g.beginPath(); g.arc(cx,cy,dr,Math.PI,0); g.fill(); g.strokeStyle="rgba(0,0,0,.3)"; g.stroke(); g.save(); g.translate(cx,cy); g.rotate(-0.5); g.fillStyle="#e0d8ff"; g.fillRect(-0.8*s,-dr,1.6*s,4*s); g.restore(); o._roofTop={x:cx,y:cy-dr}; } }
+  else if(fam==="civic"){ const dx=(Cc.gB.x-Cc.gL.x)/5, dy=(Cc.gB.y-Cc.gL.y)/5; g.fillStyle=shade(base,1.3); for(let i=0;i<=4;i++) g.fillRect(Cc.gL.x+dx*i-0.7*s,Cc.gL.y+dy*i-H*0.55,1.4*s,H*0.55);
+    poly(g,[{x:cx,y:cy-5*s},Cc.tR,Cc.tB],shade(info.roof,1.12)); poly(g,[{x:cx,y:cy-5*s},Cc.tL,Cc.tB],shade(info.roof,0.8)); poly(g,[{x:cx,y:cy-5*s},Cc.tT,Cc.tL],shade(info.roof,0.95)); poly(g,[{x:cx,y:cy-5*s},Cc.tT,Cc.tR],shade(info.roof,1.18));
+    g.strokeStyle="#8a7a52"; g.lineWidth=Math.max(1,s*0.5); g.beginPath(); g.moveTo(cx,cy-5*s); g.lineTo(cx,cy-11*s); g.stroke(); g.fillStyle=info.trim; g.fillRect(cx,cy-11*s,4*s,2.2*s); o._roofTop={x:cx,y:cy-11*s}; }
+
+  if(o.secondary) drawSkylight(g,o,Cc,s,cx,cy-1*s);
+  if(tier>=5) paintCrown(g,o,Cc,s,cx,cy);
+  }
+  drawDecay(g,o,Cc,s,H);
+  if(st.scaffold) drawScaffold(g,C,s);
 }
 
 // ---- ground ----
 const GCOL=()=>({grass:pal.grass,grass2:pal.grass2,road:pal.road,water:pal.water,sand:pal.sand,stone:pal.stone});
 function chunkRevealed(x,y){ return world.revealed.has(((x/CHUNK)|0)+","+((y/CHUNK)|0)); }
 function revealFade(x,y){ const k=((x/CHUNK)|0)+","+((y/CHUNK)|0); const t0=chunkRevealAnim[k]; if(t0==null||t0===0) return 1; return Math.min(1,(now-t0)/(animate?1200:0.0001)); }
+const TILE_EDGES=top=>[[[0,-1],top[0],top[1]],[[1,0],top[1],top[2]],[[0,1],top[2],top[3]],[[-1,0],top[3],top[0]]];
+// visible tiered road surface (dirt→cobble→paved→avenue). Each road tile fills
+// fully; curbs draw only on edges bordering non-road, so adjacent tiles (incl.
+// 2-tile avenues at the top tier) merge into one clean carriageway.
+function drawRoadTile(x,y,top,cx,cy,isStone){ const tier=isStone?3:(world.roadTierAt[x+","+y]||0);
+  let surf;
+  if(isStone) surf="#6b6660";
+  else if(roadStyle==="dirt")   surf=["#6a5232","#6a5232","#736046","#7c6b52","#84745c"][tier];
+  else if(roadStyle==="cobble") surf=["#585048","#585048","#61594f","#6b6258","#726a60"][tier];
+  else                          surf=["#484b50","#484b50","#41444a","#4c5058","#565b64"][tier]; // asphalt
+  poly(ctx,top,surf||"#4a4740");
+  const edges=TILE_EDGES(top); ctx.lineWidth=Math.max(1,zoom*0.5);
+  for(const [d,pa,pb] of edges){ const nx=x+d[0],ny=y+d[1], nb=inGrid(nx,ny)?world.ground[ny][nx]:null, nbRoad=nb&&(nb.t==="road"||nb.t==="stone");
+    if(!nbRoad){ ctx.strokeStyle= tier>=2?"rgba(214,208,192,.4)":"rgba(0,0,0,.28)"; ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); } }
+  if(roadStyle==="cobble"&&tier<=1){ ctx.fillStyle="rgba(0,0,0,.16)"; for(let i=0;i<4;i++){ const a=((i*97+x*13+y*7)%100)/100*0.7+0.15, b=((i*53+x*7+y*13)%100)/100*0.7+0.15;
+    const px=top[0].x+(top[2].x-top[0].x)*a, py=top[0].y+(top[2].y-top[0].y)*a; ctx.fillRect(px-0.5*zoom,py-0.5*zoom,1*zoom,1*zoom); } }
+  if(tier>=2){ ctx.fillStyle= tier>=3?"rgba(240,222,140,.75)":"rgba(228,228,216,.5)"; const w=(tier>=3?2.4:1.5)*zoom; ctx.fillRect(cx-w/2,cy-0.7*zoom,w,1.4*zoom); }
+}
 function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
   const T=gridIso(x,y),R=gridIso(x+1,y),B=gridIso(x+1,y+1),L=gridIso(x,y+1); const top=[T,R,B,L].map(p=>projWorld(p.x,p.y-e));
   if(!chunkRevealed(x,y)){ poly(ctx,top,"#12131f"); poly(ctx,top,"rgba(4,4,12,.4)"); return; }
+  const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2;
+  if(e>0){ const Lg=projWorld(L.x,L.y),Bg=projWorld(B.x,B.y),Rg=projWorld(R.x,R.y);
+    poly(ctx,[top[3],top[2],Bg,Lg],shade("#6a5236",Math.max(0.5,1-e*0.015)));
+    poly(ctx,[top[2],top[1],Rg,Bg],shade("#4a3826",Math.max(0.45,1-e*0.015))); }
+  const isRoad=(c.t==="road"), isStone=(c.t==="stone");
   let color=col[c.t]||"#333";
-  if(e>0){ const Lg=projWorld(L.x,L.y),Bg=projWorld(B.x,B.y),Rg=projWorld(R.x,R.y); poly(ctx,[top[3],top[2],Bg,Lg],"#5a4632"); poly(ctx,[top[2],top[1],Rg,Bg],"#443422"); }
+  if(c.t==="grass"||c.t==="grass2"){ const lift=e>0?1+Math.min(0.28,e*0.02):1; color=shade(mix(col[c.t], c.v>0.5?col.grass:col.grass2,0.25),(0.9+c.v*0.22)*lift); }
+  else if(c.t==="sand"){ color=shade(col.sand,0.92+c.v*0.16); }
   poly(ctx,top,color);
-  if(c.t==="road"||c.t==="stone"){ const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2; const tier=world.roadTierAt[x+","+y]||1;
-    ctx.fillStyle= roadStyle==="dirt"?"#6a5232": roadStyle==="cobble"?"#5c5850":"#5a5f6a"; const wpx=(1+tier)*zoom; ctx.fillRect(cx-wpx/2,cy-1,wpx,2); }
-  else if(c.t==="water"){ const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2; const ph=animate?Math.sin((x*1.7+y*2.3)+now*0.0015):0; ctx.fillStyle= ph>0.3? shade(col.water,1.25):shade(col.water,0.85); ctx.fillRect(cx-4*zoom,cy-1,8*zoom,2); }
+  if(c.t==="water"){ const ph=animate?Math.sin((x*1.7+y*2.3)+now*0.0015):(c.v-0.5);
+    poly(ctx,top, ph>0.3?shade(col.water,1.18):shade(col.water,0.9));
+    ctx.strokeStyle="rgba(200,226,236,.5)"; ctx.lineWidth=Math.max(1,zoom*0.45);
+    for(const [d,pa,pb] of TILE_EDGES(top)){ const nx=x+d[0],ny=y+d[1]; if(inGrid(nx,ny)&&world.ground[ny][nx].t!=="water"){ ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); } } }
+  else if((c.t==="grass"||c.t==="grass2")&&zoom>=3&&c.v>0.83){ ctx.fillStyle=shade(col[c.t],1.4); ctx.fillRect(cx-0.6*zoom,cy-1.2*zoom,1.2*zoom,1.6*zoom); }
+  if(isRoad||isStone) drawRoadTile(x,y,top,cx,cy,isStone);
   const f=revealFade(x,y); if(f<1) poly(ctx,top,"rgba(18,19,31,"+(1-f).toFixed(2)+")");
 }
 
@@ -549,7 +736,12 @@ function drawRails(){ for(const r of world.rails){ const path=r.path; for(let i=
 
 function drawProp(o){ const c=tileCenterIso(o.tx,o.ty), s2=projWorld(c.x,c.y-o.elev), x=s2.x,y=s2.y,z=zoom;
   switch(o.type){
-    case "house": ctx.fillStyle=shade("#b56a44",0.6); poly(ctx,[projWorld(gridIso(o.tx,o.ty+1).x,gridIso(o.tx,o.ty+1).y),projWorld(gridIso(o.tx+1,o.ty+1).x,gridIso(o.tx+1,o.ty+1).y),{x:projWorld(gridIso(o.tx+1,o.ty+1).x,gridIso(o.tx+1,o.ty+1).y).x,y:projWorld(gridIso(o.tx+1,o.ty+1).x,gridIso(o.tx+1,o.ty+1).y).y-8*z},{x:projWorld(gridIso(o.tx,o.ty+1).x,gridIso(o.tx,o.ty+1).y).x,y:projWorld(gridIso(o.tx,o.ty+1).x,gridIso(o.tx,o.ty+1).y).y-8*z}],shade("#b56a44",0.6)); ctx.fillStyle=shade(pal.roof,0.9); ctx.fillRect(x-4*z,y-12*z,8*z,4*z); break;
+    case "house":{ // founding cottage (Old Town) — little walls + pitched roof + door
+      const L=projWorld(gridIso(o.tx,o.ty+1).x,gridIso(o.tx,o.ty+1).y), B=projWorld(gridIso(o.tx+1,o.ty+1).x,gridIso(o.tx+1,o.ty+1).y), wh=8*z;
+      poly(ctx,[L,B,{x:B.x,y:B.y-wh},{x:L.x,y:L.y-wh}],shade("#b56a44",0.7),"rgba(0,0,0,.3)");
+      ctx.fillStyle="#4a3320"; ctx.fillRect((L.x+B.x)/2-1*z,(L.y+B.y)/2-5*z,2*z,5*z);
+      const apex={x:x,y:y-wh-5*z}; poly(ctx,[apex,{x:L.x,y:L.y-wh},{x:B.x,y:B.y-wh}],shade(pal.roof,1.05),"rgba(0,0,0,.3)");
+      break; }
     case "statue": ctx.fillStyle="#6b6660"; ctx.fillRect(x-3*z,y-2*z,6*z,3*z); ctx.fillStyle="#9a9488"; ctx.fillRect(x-1.5*z,y-9*z,3*z,7*z); ctx.fillStyle="#b6b0a2"; ctx.fillRect(x-1.5*z,y-11*z,3*z,2*z); break;
     case "fountain": ctx.fillStyle="#6a6a72"; ctx.beginPath(); ctx.ellipse(x,y,5*z,2.6*z,0,0,7); ctx.fill(); ctx.fillStyle=shade(pal.water,1.1); ctx.beginPath(); ctx.ellipse(x,y-0.5*z,3.6*z,1.8*z,0,0,7); ctx.fill(); ctx.fillStyle="#8a8a92"; ctx.fillRect(x-0.8*z,y-6*z,1.6*z,5*z); if(animate){ ctx.fillStyle="rgba(190,230,240,.6)"; for(let i=0;i<5;i++){ const t=((now*0.001)+i/5)%1; ctx.fillRect(x-0.5*z+Math.sin(i)*2*z,y-6*z-t*4*z,1*z,1*z); } } break;
     case "plaque": ctx.fillStyle="#7a6a44"; ctx.fillRect(x-2*z,y-3*z,4*z,3*z); ctx.fillStyle=pal.accent; ctx.fillRect(x-1.6*z,y-2.6*z,3.2*z,1.4*z); break;
@@ -557,6 +749,7 @@ function drawProp(o){ const c=tileCenterIso(o.tx,o.ty), s2=projWorld(c.x,c.y-o.e
     case "well": ctx.fillStyle="#6b6660"; ctx.beginPath(); ctx.ellipse(x,y-1*z,3*z,1.6*z,0,0,7); ctx.fill(); ctx.fillStyle="#4a4640"; ctx.beginPath(); ctx.ellipse(x,y-1.5*z,2*z,1*z,0,0,7); ctx.fill(); ctx.fillStyle="#5a3d24"; ctx.fillRect(x-2.4*z,y-7*z,0.8*z,5*z); ctx.fillRect(x+1.6*z,y-7*z,0.8*z,5*z); ctx.fillStyle=shade(pal.roof,0.9); ctx.fillRect(x-3*z,y-8.5*z,6*z,2*z); break;
     case "boat": ctx.fillStyle="#5a3a26"; poly(ctx,[{x:x-4*z,y:y-1*z},{x:x+4*z,y:y-1*z},{x:x+2.6*z,y:y+1.6*z},{x:x-2.6*z,y:y+1.6*z}],"#5a3a26"); ctx.fillStyle="#8a6a44"; ctx.fillRect(x-3*z,y-1.6*z,6*z,0.8*z); ctx.fillStyle="#4a3320"; ctx.fillRect(x-0.3*z,y-6*z,0.6*z,5*z); break;
     case "lighthouse": ctx.fillStyle="#d8d2c4"; ctx.fillRect(x-2.5*z,y-14*z,5*z,14*z); ctx.fillStyle="#c0402f"; ctx.fillRect(x-2.5*z,y-11*z,5*z,2*z); ctx.fillRect(x-2.5*z,y-5*z,5*z,2*z); ctx.fillStyle=animate?("rgba(255,225,120,"+(0.4+0.5*Math.abs(Math.sin(now*0.003)))+")"):"#ffe178"; ctx.fillRect(x-3*z,y-17*z,6*z,3*z); o._lighthouse={x,y:y-15*z}; break;
+    default: unknownSprites++;   // never silently draw an unknown prop (selftest asserts 0)
   }
 }
 function drawStake(o){ const c=tileCenterIso(o.tx,o.ty), s2=projWorld(c.x,c.y), x=s2.x,y=s2.y,z=zoom; ctx.fillStyle="#4a4632"; ctx.fillRect(x-0.6*z,y-6*z,1.2*z,6*z); ctx.fillStyle="#c9b26a"; ctx.fillRect(x-2.5*z,y-10*z,5*z,4*z); ctx.fillStyle="#1a1a26"; ctx.font=(4.5*z)+"px monospace"; ctx.textAlign="center"; ctx.fillText("?",x,y-6.5*z); ctx.textAlign="left"; }
@@ -572,7 +765,8 @@ function drawShipSprite(g,x,y,z,sh){ if(sh&&sh.state!=="docked"){ g.fillStyle="r
   g.fillStyle="#3a2418"; g.fillRect(x-4*z,y+1*z,8*z,1.3*z); g.fillStyle="#8a6a44"; g.fillRect(x-4.5*z,y-3*z,9*z,1.4*z);
   g.fillStyle="#4a3320"; g.fillRect(x-0.5*z,y-12*z,1*z,10*z); g.fillStyle="#e8e0cc"; poly(g,[{x:x+0.7*z,y:y-12*z},{x:x+5.5*z,y:y-4.5*z},{x:x+0.7*z,y:y-4.5*z}]); g.fillStyle="#cfc6ac"; poly(g,[{x:x-0.7*z,y:y-10*z},{x:x-4*z,y:y-4.5*z},{x:x-0.7*z,y:y-4.5*z}]); }
 function drawShip(sh){ const c=tileCenterIso(sh.x,sh.y), s2=projWorld(c.x,c.y); drawShipSprite(ctx,s2.x,s2.y,zoom,sh); if(sh.state==="docked"){ for(let i=0;i<sh.cargo;i++){ const cc=tileCenterIso(sh.dock.x-0.5+i*0.4,sh.dock.y-0.5); const cs=projWorld(cc.x,cc.y); ctx.fillStyle="#9a7a4a"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,4*zoom); ctx.fillStyle="#7a5a34"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,1*zoom); } } }
-function drawSmoke(pt,seed){ if(!animate) return; for(let i=0;i<5;i++){ const t=((now*0.00035)+i/5+seed*0.13)%1, a=(1-t)*0.5, wob=Math.sin(now*0.002+i)*3*zoom*t, sz=(1.5+t*3)*zoom; ctx.fillStyle="rgba(180,180,190,"+a.toFixed(3)+")"; ctx.fillRect(pt.x+wob-sz/2,pt.y-t*34*zoom,sz,sz); } }
+function drawSmoke(pt,seed,boost){ if(!animate) return; const spd=boost?0.0008:0.00035, n=boost?7:5;
+  for(let i=0;i<n;i++){ const t=((now*spd)+i/n+seed*0.13)%1, a=(1-t)*(boost?0.62:0.5), wob=Math.sin(now*0.002+i)*3*zoom*t, sz=(1.5+t*3)*zoom; ctx.fillStyle="rgba(180,180,190,"+a.toFixed(3)+")"; ctx.fillRect(pt.x+wob-sz/2,pt.y-t*34*zoom,sz,sz); } }
 function drawBeacon(pt){ const pulse=animate?(0.4+0.6*Math.abs(Math.sin(now*0.005))):0.9; ctx.fillStyle="rgba(255,90,70,"+(pulse*0.4).toFixed(3)+")"; ctx.beginPath(); ctx.arc(pt.x,pt.y,6*zoom,0,7); ctx.fill(); ctx.fillStyle="rgba(255,110,80,"+pulse.toFixed(3)+")"; ctx.fillRect(pt.x-1.5*zoom,pt.y-1.5*zoom,3*zoom,3*zoom); }
 function drawLighthouseBeam(pt){ if(!animate) return; const ang=now*0.0009; ctx.save(); ctx.translate(pt.x,pt.y); ctx.rotate(ang); const len=64*zoom; const grd=ctx.createLinearGradient(0,0,len,0); grd.addColorStop(0,"rgba(255,235,150,.26)"); grd.addColorStop(1,"rgba(255,235,150,0)"); ctx.fillStyle=grd; ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(len,-8*zoom); ctx.lineTo(len,8*zoom); ctx.closePath(); ctx.fill(); ctx.restore(); }
 
@@ -580,8 +774,24 @@ function drawWeather(L){ if(!animate) return; const s=weatherState, inten=weathe
   if(s==="rain"){ ctx.strokeStyle="rgba(150,180,220,.4)"; ctx.lineWidth=1; const n=Math.floor(180*inten); for(let i=0;i<n;i++){ const x=((i*137+now*0.9)%(W+40))-20, y=((i*89+now*1.4)%(H+40))-20; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-3,y+9); ctx.stroke(); } ctx.fillStyle="rgba(30,40,70,.12)"; ctx.fillRect(0,0,W,H); }
   else if(s==="snow"){ ctx.fillStyle="rgba(240,244,255,.85)"; const n=Math.floor(140*inten); for(let i=0;i<n;i++){ const x=((i*151+now*0.15+Math.sin(now*0.001+i)*20)%(W+20))-10, y=((i*97+now*0.35)%(H+20))-10; ctx.fillRect(x,y,1.6,1.6); } ctx.fillStyle="rgba(200,215,235,.08)"; ctx.fillRect(0,0,W,H); }
   else if(s==="fog"){ ctx.fillStyle="rgba(180,185,200,"+(0.12+0.14*inten)+")"; ctx.fillRect(0,0,W,H); for(let i=0;i<3;i++){ const y=(H*0.3)+i*H*0.22+Math.sin(now*0.0004+i)*20; const gr=ctx.createLinearGradient(0,y-40,0,y+40); gr.addColorStop(0,"rgba(200,205,220,0)"); gr.addColorStop(0.5,"rgba(200,205,220,"+(0.1*inten)+")"); gr.addColorStop(1,"rgba(200,205,220,0)"); ctx.fillStyle=gr; ctx.fillRect(0,y-40,W,80); } } }
-function drawEffects(){ for(let i=effects.length-1;i>=0;i--){ const e=effects[i]; const age=now-e.t; if(age>2600||!animate){ effects.splice(i,1); continue; }
-    if(e.type==="fireworks"){ const c=tileCenterIso(e.x,e.y), s2=projWorld(c.x,c.y-30); for(let b=0;b<3;b++){ const bt=age-b*500; if(bt<0||bt>1400) continue; const p=bt/1400; const cols=["#ffcf7a","#7fe3e0","#ff6a5a","#7fe3a0"]; ctx.fillStyle=cols[b%4]; for(let k=0;k<16;k++){ const a=k/16*6.28, r=p*40*zoom; ctx.globalAlpha=(1-p); ctx.fillRect(s2.x+Math.cos(a)*r-1,s2.y+Math.sin(a)*r-1+b*8,2,2); } ctx.globalAlpha=1; } } } }
+function drawEffects(){ for(let i=effects.length-1;i>=0;i--){ const e=effects[i]; const age=now-e.t; if(!animate||(e.type==="sparkle"?age>900:age>2600)){ effects.splice(i,1); continue; }
+    if(e.type==="fireworks"){ const c=tileCenterIso(e.x,e.y), s2=projWorld(c.x,c.y-30); for(let b=0;b<3;b++){ const bt=age-b*500; if(bt<0||bt>1400) continue; const p=bt/1400; const cols=["#ffcf7a","#7fe3e0","#ff6a5a","#7fe3a0"]; ctx.fillStyle=cols[b%4]; for(let k=0;k<16;k++){ const a=k/16*6.28, r=p*40*zoom; ctx.globalAlpha=(1-p); ctx.fillRect(s2.x+Math.cos(a)*r-1,s2.y+Math.sin(a)*r-1+b*8,2,2); } ctx.globalAlpha=1; } }
+    else if(e.type==="sparkle"){ const o=world.lots.find(l=>l.id===e.id); if(!o||!o._roofTop) continue; const p=age/900, top=o._roofTop; ctx.globalAlpha=1-p;
+      for(let k=0;k<6;k++){ const a=k/6*6.28, r=(4+p*10)*zoom; ctx.fillStyle=k%2?"#ffe9a8":"#bff0f4"; ctx.fillRect(top.x+Math.cos(a)*r-0.8*zoom,top.y-6*zoom+Math.sin(a)*r-0.8*zoom,1.6*zoom,1.6*zoom); } ctx.globalAlpha=1; } } }
+// live-presence: birds circling active roofs, minions scurrying in on fork.start
+function drawBird(x,y,z,flapUp,perched){ ctx.strokeStyle="#1e1e28"; ctx.lineWidth=Math.max(1,z*0.5);
+  if(perched){ ctx.fillStyle="#1e1e28"; ctx.fillRect(x-1*z,y-1.2*z,2*z,1.2*z); ctx.fillRect(x-0.4*z,y-2.2*z,0.9*z,1.1*z); return; }
+  const w=flapUp?1.1:-0.3; ctx.beginPath(); ctx.moveTo(x-2.4*z,y-w*z); ctx.lineTo(x,y); ctx.lineTo(x+2.4*z,y-w*z); ctx.stroke(); }
+function drawPresence(){ if(REDUCE) return; let budget=10;
+  for(const o of world.lots){ const r=activity[o.id]; if(!r||now-r.last>60000||!o._roofTop) continue; const top=o._roofTop;
+    const n=Math.min(4,1+Math.floor(r.hits.length/2));
+    for(let i=0;i<n&&budget>0;i++){ budget--;
+      if(r.waiting){ drawBird(top.x+(i-(n-1)/2)*3.2*zoom, top.y-1*zoom, zoom, false, true); }
+      else { const a=now*0.004+i*(6.28/n); drawBird(top.x+Math.cos(a)*7*zoom, top.y-9*zoom+Math.sin(a)*3*zoom, zoom, (((now*0.02+i)|0)&1)===0, false); } } }
+  for(let i=minions.length-1;i>=0;i--){ const m=minions[i], o=world.lots.find(l=>l.id===m.id), p=(now-m.t)/1200; if(p>=1||!o){ minions.splice(i,1); continue; }
+    const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y), fromx=sc.x-18*zoom, fromy=sc.y+10*zoom;
+    const mx=fromx+(sc.x-fromx)*p, my=fromy+(sc.y-fromy)*p; ctx.globalAlpha=1-p*p;
+    ctx.fillStyle="#d8b24a"; ctx.fillRect(mx-1*zoom,my-3*zoom,2*zoom,3*zoom); ctx.fillStyle="#2a2620"; ctx.fillRect(mx-1*zoom,my-4.4*zoom,2*zoom,1.5*zoom); ctx.globalAlpha=1; } }
 
 function skyBg(L){ const g=ctx.createLinearGradient(0,0,0,H); const night={t:"#0b1030",m:"#1a1838",b:"#241a38"}, day={t:"#4f86b8",m:"#7fb0cf",b:"#bfe0e8"}; const t=L.light;
   g.addColorStop(0,mix(night.t,day.t,t)); g.addColorStop(0.55,mix(night.m,day.m,t)); g.addColorStop(1,mix(mix(night.b,day.b,t),"#d98a5a",L.warm*0.6)); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
@@ -591,18 +801,29 @@ function skyBg(L){ const g=ctx.createLinearGradient(0,0,0,H); const night={t:"#0
 function revealedBounds(){ let minc=GRIDCH,maxc=-1,minr=GRIDCH,maxr=-1; for(const key of world.revealed){ const [cx,cy]=key.split(",").map(Number); minc=Math.min(minc,cx);maxc=Math.max(maxc,cx);minr=Math.min(minr,cy);maxr=Math.max(maxr,cy); }
   if(maxc<0) return {x0:0,y0:0,x1:GRID-1,y1:GRID-1}; return {x0:Math.max(0,(minc-1)*CHUNK),y0:Math.max(0,(minr-1)*CHUNK),x1:Math.min(GRID-1,(maxc+2)*CHUNK-1),y1:Math.min(GRID-1,(maxr+2)*CHUNK-1)}; }
 
+// (re)build the rotation-aware painter order (tiles + objects) when the
+// orientation, revealed area, or world instance changes.
+function ensureDrawOrder(){ const b=revealedBounds(); const key=orient+"|"+b.x0+","+b.y0+","+b.x1+","+b.y1+"|"+world._id;
+  if(key===_drawKey) return; _drawKey=key;
+  tileOrder=[]; for(let x=b.x0;x<=b.x1;x++)for(let y=b.y0;y<=b.y1;y++) tileOrder.push([x,y,depthOf(x,y)]);
+  tileOrder.sort((p,q)=>p[2]-q[2]);
+  for(const o of world.objs) o.depth=depthOf(o.tx,o.ty);
+  world.objs.sort((a,b)=>(a.depth+((a.h||0)*0.001))-(b.depth+((b.h||0)*0.001))); }
+
 let lastBuildingCount=0;
 function render(){
   const L=lighting();
   ctx.setTransform(DPR,0,0,DPR,0,0); ctx.imageSmoothingEnabled=false; skyBg(L);
-  const b=revealedBounds();
-  for(let s=b.x0+b.y0; s<=b.x1+b.y1; s++){ for(let x=Math.max(b.x0,s-b.y1); x<=Math.min(b.x1,s-b.y0); x++){ const y=s-x; if(y<b.y0||y>b.y1) continue; const c=tileCenterIso(x,y), sc=projWorld(c.x,c.y); if(sc.x<-80||sc.x>W+80||sc.y<-120||sc.y>H+120) continue; drawTile(x,y); } }
+  ensureDrawOrder();
+  for(const [x,y] of tileOrder){ const c=tileCenterIso(x,y), sc=projWorld(c.x,c.y); if(sc.x<-80||sc.x>W+80||sc.y<-120||sc.y>H+140) continue; drawTile(x,y); }
   drawRails();
   for(const o of world.stakes) drawStake(o);
   const smokes=[],beacons=[]; let lighthouseTop=null; let count=0;
-  for(const o of world.objs){ const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y); if(sc.x<-160||sc.x>W+160||sc.y<-300||sc.y>H+160){ o._smoke=o._beacon=null; continue; }
-    if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.light<0.5?1:0); count++; if(o._smoke) smokes.push([o._smoke,o.seed]); if(o._beacon) beacons.push(o._beacon); }
+  for(const o of world.objs){ const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y); if(sc.x<-160||sc.x>W+160||sc.y<-300||sc.y>H+160){ o._smoke=o._beacon=o._roofTop=null; continue; }
+    if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.light<0.5?1:0); count++;
+      if(o._smoke){ const r=activity[o.id]; smokes.push([o._smoke,o.seed,(r&&now-r.smokeBoost<1500)?1:0]); } if(o._beacon) beacons.push(o._beacon); }
     else { drawProp(o); if(o._lighthouse) lighthouseTop=o._lighthouse; } }
+  drawPresence();
   lastBuildingCount=count;
   for(const sh of ships) drawShip(sh);
   const list=citizens.slice().sort((a,b)=>(a.px+a.py)-(b.px+b.py));
@@ -633,7 +854,7 @@ function drawMinimap(){ mmx.setTransform(1,0,0,1,0,0); mmx.imageSmoothingEnabled
 // ============================ HUD ============================
 function nameOf(o){ return showRepo? o.repo : o.alias; }
 function refreshHUD(){
-  $("dayNum").textContent = mode==="timelapse"? ("day "+curDay+" / "+MAX_DAY) : "day "+MODEL.day;
+  $("dayNum").textContent = mode==="timelapse"? ("day "+curDay+" / "+MAX_DAY) : "day "+(M.day||MODEL.day);
   $("dayDate").textContent = displayDate().toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
   const pct=Math.min(100,(M.stats.totalWu/ (MODEL.stats.totalWu||1))*100); $("wuBar").style.width=pct+"%";
   $("wuLbl").textContent = M.stats.totalWu.toLocaleString()+" WU total";
@@ -698,6 +919,37 @@ $("alias").addEventListener("click",()=>{ showRepo=!showRepo; $("alias").textCon
 $("auto").addEventListener("click",()=>{ todAuto=!todAuto; $("auto").classList.toggle("on",todAuto); if(!todAuto) todMinutes=+$("tod").value; dirty=true; });
 $("tod").addEventListener("input",()=>{ todAuto=false; $("auto").classList.remove("on"); todMinutes=+$("tod").value; dirty=true; });
 
+// ============================ MAP ROTATION (90° steps; ⟲/⟳ + "r") ============================
+function setOrient(no){ const f=screenToTile(W/2,H/2);           // keep the centre tile centred across the turn
+  orient=((no%4)+4)%4; _drawKey=""; const c=tileCenterIso(f.tx,f.ty); camIx=c.x; camIy=c.y; clampCam(); hideTip(); dirty=true; }
+$("rotL").addEventListener("click",()=>setOrient(orient+1));
+$("rotR").addEventListener("click",()=>setOrient(orient-1));
+window.addEventListener("keydown",e=>{ if((e.key==="r"||e.key==="R")&&!e.metaKey&&!e.ctrlKey){ setOrient(orient+1); } });
+
+// ============================ LIVE SSE + PRESENCE (http only; atmosphere-only) ============================
+const activity=Object.create(null);   // lotId -> {last, hits[], waiting, smokeBoost}
+let minions=[];
+function setLive(state){ const d=$("livedot"); if(!d) return; d.classList.toggle("on",state==="connected"); d.title="live feed: "+state; }
+// splice a CityDelta into the live log (sorted) and, if following live view, re-fold + replay its fx
+function applyLiveDelta(d){ if(!d||typeof d.kind!=="string"||typeof d.day!=="number") return;
+  let i=DELTAS.length; while(i>0 && (DELTAS[i-1].day>d.day || (DELTAS[i-1].day===d.day && (DELTAS[i-1].seq||0)>(d.seq||0)))) i--; DELTAS.splice(i,0,d);
+  if(d.day>MAX_DAY){ MAX_DAY=d.day; $("scrub").max=MAX_DAY; }
+  if(mode==="live"){ curDay=MAX_DAY; M=fold(DELTAS,curDay); world=buildWorld(M,false); syncCitizens(M.stats.population,M.stats.pets,M.stats.allNighterYesterday); if(animate) onDeltaCrossed(d); dirty=true; } }
+// activity messages -> presence effects, keyed by the matching lot (unknown -> ignored)
+function onActivity(a){ if(REDUCE||!a||!a.repo) return; const o=world.lots.find(l=>l.repo===a.repo||l.id==="L-"+a.repo); if(!o) return;
+  const r=activity[o.id]||(activity[o.id]={last:0,hits:[],waiting:false,smokeBoost:0});
+  r.last=now; r.hits.push(now); r.hits=r.hits.filter(t=>now-t<60000); r.waiting=(a.kind==="waiting.human");
+  if(a.kind==="tool.pre"&&a.tool==="Bash"){ if(o._chimney) r.smokeBoost=now; }
+  else if(a.kind==="tool.pre"&&(a.tool==="Edit"||a.tool==="Write")) o._flickerUntil=now+800;
+  else if(a.kind==="turn.end"){ effects.push({type:"sparkle",t:now,id:o.id}); if(Audio.on) Audio.ding(); }
+  else if(a.kind==="fork.start"&&minions.length<8) minions.push({id:o.id,t:now}); }
+function handleSSE(payload){ let obj; try{ obj=JSON.parse(payload); }catch(_){ return; } if(!obj||typeof obj!=="object") return;
+  if(obj.type==="activity") onActivity(obj); else if(typeof obj.kind==="string") applyLiveDelta(obj); /* unknown message types ignored */ }
+function initSSE(){ if(!/^https?:$/.test(location.protocol)||typeof EventSource==="undefined"){ setLive("none"); return; }
+  setLive("connecting");
+  try{ const es=new EventSource("/events"); es.onopen=()=>setLive("connected"); es.onerror=()=>setLive("connecting"); es.onmessage=e=>handleSSE(e.data); }
+  catch(_){ setLive("none"); } }
+
 // ============================ RESIZE + LOOP ============================
 function resize(){ DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1)); W=cv.clientWidth||window.innerWidth||1200; H=cv.clientHeight||window.innerHeight||800; cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR); clampCam(); dirty=true; }
 window.addEventListener("resize",resize);
@@ -719,14 +971,16 @@ function loop(t){ const dt=Math.min(80,t-(lastT||t)); lastT=t; now=t;
 resize();
 setMode("live");
 // optional deep-link overrides (used by wave-2 server links + verification):
-// ?mode=timelapse|live · ?tod=<minutes 0-1439> (forces clock) · ?day=<0-90> (timelapse scrub)
+// ?mode=timelapse|live · ?tod=<minutes 0-1439> (forces clock) · ?day=<0-90> (timelapse scrub) · ?rot=0..3
 (function applyQuery(){ const q=new URLSearchParams(location.search);
   if(q.get("mode")==="timelapse"||q.get("mode")==="live") setMode(q.get("mode"));
+  if(q.has("rot")) orient=((+q.get("rot")%4)+4)%4;
   if(q.has("tod")){ todAuto=false; $("auto").classList.remove("on"); todMinutes=Math.max(0,Math.min(1439,+q.get("tod")||0)); $("tod").value=todMinutes; }
   if(q.has("day")){ if(mode!=="timelapse") setMode("timelapse"); tl.playing=false; setPlay(); const v=Math.max(0,Math.min(MAX_DAY,+q.get("day")||0)); tl.dayFloat=v; setDay(v,false); $("scrub").value=v; }
 })();
-// frame the city on Old Town
+// frame the city on Old Town (in the current orientation)
 (function frame(){ const o=world.origin; const c=tileCenterIso(o[0],o[1]); camIx=c.x; camIy=c.y; clampCam(); })();
+initSSE();   // live feed when served over http(s); no-op on file://
 requestAnimationFrame(loop);
 if(REDUCE){ ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListener(ev,()=>{dirty=true;})); }
 
@@ -753,8 +1007,21 @@ if(SELFTEST){
     // 4) reduced-motion path: animate off => still renders w/o throwing
     const savedAnim=animate; animate=false; render(); animate=savedAnim;
     res.checks.reducedMotionClean=true;
+    // 5) map rotation: all 4 orientations paint every lot and re-sort cleanly
+    setMode("live"); let rotOK=true; res.checks.rotBuildings=[];
+    for(let r=0;r<4;r++){ setOrient(r); render(); res.checks.rotBuildings.push(lastBuildingCount); if(lastBuildingCount!==MODEL.lots.length) rotOK=false; }
+    setOrient(0); res.checks.rotationPaintsAll=rotOK;
+    // 6) NO unknown-sprite fallbacks were drawn across any render above
+    res.checks.unknownSprites=unknownSprites; res.checks.noUnknownSprites=(unknownSprites===0);
+    // 7) live-presence: injecting synthetic activity + junk SSE messages must not error
+    const rep=(MODEL.lots[0]&&MODEL.lots[0].repo)||"x";
+    ["tool.pre|Bash","tool.pre|Edit","tool.pre|Write","turn.end|","fork.start|","waiting.human|","session.start|"]
+      .forEach(s=>{ const p=s.split("|"); handleSSE(JSON.stringify({type:"activity",repo:rep,kind:p[0],tool:p[1]||undefined})); });
+    handleSSE('{"type":"totally-unknown-message"}'); handleSSE('not-json-at-all'); handleSSE(':heartbeat'); handleSSE('{"kind":123}');
+    render(); res.checks.activityInjectClean=true;
     res.errors=errors.slice();
-    res.ok = res.checks.foldEqualsModel && res.checks.livePaintsAll && res.checks.timelapseEndMatchesLive && res.checks.reducedMotionClean && errors.length===0;
+    res.ok = res.checks.foldEqualsModel && res.checks.livePaintsAll && res.checks.timelapseEndMatchesLive
+      && res.checks.reducedMotionClean && res.checks.rotationPaintsAll && res.checks.noUnknownSprites && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);
     document.title="selftest:"+(res.ok?"PASS":"FAIL");

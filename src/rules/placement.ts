@@ -238,6 +238,113 @@ export function pathRoad(g: Geo, sx: number, sy: number): Coord[] {
 
 // ============================ placement ============================
 
+// ============================ lot-spacing invariants (game-rules §5) ============================
+//
+// Real-data dogfooding showed buildings packing wall-to-wall with no streets.
+// Three invariants keep the town readable (candidates that violate them are
+// rejected in affinitySpot / placeLot):
+//   1. SPACING — no two lots may be orthogonally adjacent; every lot keeps a
+//      1-tile clear ring (road or ground, never another lot).
+//   2. STREET-FRONTING — every lot ends up orthogonally adjacent to a road tile
+//      (enforced by the compiler's pathRoad carve, which always lands a road
+//      tile next to the lot; see lotTouchesRoad for the assertion helper).
+//   3. BLOCK RULE — no king-connected (diagonal) lot cluster may exceed a 2x2
+//      tile footprint, so blocks stay small and streets thread between them.
+
+const KING: Coord[] = [
+  [1, 0], [-1, 0], [0, 1], [0, -1],
+  [1, 1], [1, -1], [-1, 1], [-1, -1],
+];
+
+/** SPACING: does any orthogonal neighbour already hold a lot? */
+export function hasOrthoLot(g: Geo, x: number, y: number): boolean {
+  for (const [ox, oy] of NEIGHBORS) if (g.occupied.has(key(x + ox, y + oy))) return true;
+  return false;
+}
+
+/** STREET-FRONTING assertion helper: is (x,y) orthogonally adjacent to a road? */
+export function lotTouchesRoad(g: Geo, x: number, y: number): boolean {
+  for (const [ox, oy] of NEIGHBORS) if (g.roadSet.has(key(x + ox, y + oy))) return true;
+  return false;
+}
+
+/**
+ * BLOCK RULE: bounding box of the king-connected (diagonal) lot cluster that
+ * placing a lot at (x,y) would join. Lots are never orthogonally adjacent, so
+ * clusters form only through diagonal contact; capping the footprint at 2x2
+ * tiles breaks long diagonal "walls".
+ */
+function clusterFootprint(g: Geo, x: number, y: number): { w: number; h: number } {
+  const present = new Set(g.lotsGeo.map((l) => key(l.x, l.y)));
+  present.add(key(x, y));
+  const seen = new Set([key(x, y)]);
+  const stack: Coord[] = [[x, y]];
+  let minx = x, maxx = x, miny = y, maxy = y;
+  while (stack.length) {
+    const [cx, cy] = stack.pop()!;
+    minx = Math.min(minx, cx); maxx = Math.max(maxx, cx);
+    miny = Math.min(miny, cy); maxy = Math.max(maxy, cy);
+    for (const [ox, oy] of KING) {
+      const nk = key(cx + ox, cy + oy);
+      if (present.has(nk) && !seen.has(nk)) {
+        seen.add(nk);
+        stack.push([cx + ox, cy + oy]);
+      }
+    }
+  }
+  return { w: maxx - minx + 1, h: maxy - miny + 1 };
+}
+
+/** A candidate tile is valid for a new lot if it is free, keeps the 1-tile ring
+ * (spacing), and — when `strict` — does not overgrow a diagonal block. */
+function lotSiteValid(g: Geo, x: number, y: number, strict: boolean): boolean {
+  if (!tileFree(g, x, y)) return false;
+  if (hasOrthoLot(g, x, y)) return false;
+  if (strict) {
+    const bb = clusterFootprint(g, x, y);
+    if (bb.w > 2 || bb.h > 2) return false;
+  }
+  return true;
+}
+
+/**
+ * ROAD HIERARCHY (game-rules §5): a top-tier corridor becomes a 2-tile-wide
+ * avenue. For each tile on `path`, lay one parallel road tile on a free
+ * perpendicular side. Returns the newly-laid tiles (sorted) so the caller can
+ * extend roads[].path and emit them; the road's tier/id/naming are unchanged.
+ */
+export function widenAvenue(g: Geo, path: Coord[]): Coord[] {
+  const inPath = new Set(path.map(([x, y]) => key(x, y)));
+  const added: Coord[] = [];
+  const canLay = (x: number, y: number): boolean => {
+    if (!inBounds(x, y) || inPath.has(key(x, y))) return false;
+    if (!isRevealed(g, x, y) || isWater(g, x, y) || g.occupied.has(key(x, y))) return false;
+    const t = g.ground[y]![x]!.t;
+    return t !== "road" && t !== "stone";
+  };
+  for (let i = 0; i < path.length; i++) {
+    const [x, y] = path[i]!;
+    const ref = path[i + 1] ?? path[i - 1];
+    if (!ref) continue;
+    const adx = Math.sign(ref[0] - x);
+    const ady = Math.sign(ref[1] - y);
+    // two perpendicular sides; pick the first free one, deterministically
+    for (const [px, py] of [
+      [x - ady, y + adx],
+      [x + ady, y - adx],
+    ] as Coord[]) {
+      if (canLay(px, py)) {
+        setRoad(g, px, py);
+        inPath.add(key(px, py));
+        added.push([px, py]);
+        break;
+      }
+    }
+  }
+  added.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  return added;
+}
+
 export function clusterCentroid(g: Geo, cat: Category): { x: number; y: number } {
   let n = 0;
   let sx = 0;
@@ -263,7 +370,7 @@ function affinitySpot(g: Geo, cat: Category, kb: string): Coord | null {
       const ang = (a / 24) * Math.PI * 2 + rand(g.seed, `${kb}:ang:${r}:${a}`) * 0.2;
       const x = Math.round(cen.x + Math.cos(ang) * r + (rand(g.seed, `${kb}:jx:${r}:${a}`) - 0.5) * 1.5);
       const y = Math.round(cen.y + Math.sin(ang) * r + (rand(g.seed, `${kb}:jy:${r}:${a}`) - 0.5) * 1.5);
-      if (!tileFree(g, x, y)) continue;
+      if (!lotSiteValid(g, x, y, true)) continue;
       let score = -r + rand(g.seed, `${kb}:s:${r}:${a}`) * 1.5;
       for (const l of g.lotsGeo) {
         const d = Math.hypot(l.x - x, l.y - y);
@@ -278,17 +385,27 @@ function affinitySpot(g: Geo, cat: Category, kb: string): Coord | null {
     if (best && r >= 2) break;
   }
   if (!best) {
-    // fallback: nearest free tile spiralling out from origin
-    outer: for (let r = 1; r < 14; r++)
-      for (let dy = -r; dy <= r; dy++)
-        for (let dx = -r; dx <= r; dx++) {
-          const x = g.origin.x + dx;
-          const y = g.origin.y + dy;
-          if (tileFree(g, x, y)) {
-            best = [x, y];
-            break outer;
+    // fallback: nearest tile spiralling out from origin. Try the full invariant
+    // set first (spacing + block rule), then relax the soft block rule, then
+    // spacing-only, so a lot is still placed when the town gets dense — but the
+    // 1-tile spacing ring is only ever dropped as a last resort.
+    for (const mode of [2, 1, 0] as const) {
+      outer: for (let r = 1; r < 26; r++)
+        for (let dy = -r; dy <= r; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            const x = g.origin.x + dx;
+            const y = g.origin.y + dy;
+            const ok =
+              mode === 2 ? lotSiteValid(g, x, y, true)
+              : mode === 1 ? lotSiteValid(g, x, y, false)
+              : tileFree(g, x, y);
+            if (ok) {
+              best = [x, y];
+              break outer;
+            }
           }
-        }
+      if (best) break;
+    }
   }
   return best;
 }

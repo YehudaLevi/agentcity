@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"sess-main","cwd":"/home/dev/myrepo","timestamp":"2026-06-01T10:00:00.000Z","message":{"role":"user","content":[{"type":"text","text":"do the work"}]}}
+{"type":"assistant","sessionId":"sess-main","cwd":"/home/dev/myrepo","timestamp":"2026-06-01T10:00:05.000Z","message":{"role":"assistant","stop_reason":"tool_use","content":[{"type":"tool_use","id":"tk1","name":"Task","input":{"description":"refactor the module in an isolated worktree"}}]}}
+{"type":"user","sessionId":"sess-main","cwd":"/home/dev/myrepo","timestamp":"2026-06-01T10:05:00.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tk1","content":"subagent finished"}]}}
+{"type":"assistant","sessionId":"sess-main","cwd":"/home/dev/myrepo","timestamp":"2026-06-01T10:05:10.000Z","message":{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"all done"}]}}

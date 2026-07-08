@@ -85,6 +85,10 @@ describe("founding flow", () => {
   it("poll returns only the newly-produced deltas after the checkpoint", () => {
     writeEvents(BATCH1);
     boot(root, sources(), { seed: SEED });
+    // committed frontier after founding = last COMPLETE day (state.day). The
+    // final day of batch1 is still "open" (re-derived from pending), so poll
+    // finalizes it and everything after — all strictly past this frontier.
+    const frontier = readCheckpoint(root)!.state.day;
 
     // no new events yet
     expect(poll(root, sources())).toBeNull();
@@ -93,9 +97,8 @@ describe("founding flow", () => {
     const p = poll(root, sources())!;
     expect(p).not.toBeNull();
     expect(p.newDeltas.length).toBeGreaterThan(0);
-    // every pushed delta is dated on a day newer than batch1's last day
-    const lastB1Day = fold(BATCH1, SEED).model.day;
-    expect(Math.min(...p.newDeltas.map((d) => d.day as number))).toBeGreaterThan(lastB1Day);
+    // every pushed delta is dated on a day past the committed frontier
+    expect(Math.min(...p.newDeltas.map((d) => d.day as number))).toBeGreaterThan(frontier);
     // and a subsequent poll with nothing new is a no-op
     expect(poll(root, sources())).toBeNull();
   });

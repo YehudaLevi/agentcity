@@ -6,7 +6,7 @@
 // content, and any other content field NEVER leak into PixelEvent.detail.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, sep } from "node:path";
 import type { PixelEvent, EventKind } from "../types.js";
 
 const MAX_DETAIL = 120;
@@ -51,10 +51,49 @@ function* walkJsonl(dir: string): Generator<string> {
   }
 }
 
+/**
+ * BUG-2 fix (subagent worktrees). A subagent launched with worktree isolation
+ * runs with cwd `<repo>/.claude/worktrees/agent-<id>`, so a naive basename would
+ * mint a phantom repo "agent-<id>" (its own building) instead of crediting the
+ * parent repo. Strip anything from a `.claude/` path segment onward so the repo
+ * root is recovered (`.../prom-manager/.claude/worktrees/agent-x` -> `prom-manager`).
+ * Returns "" when the cwd yields no usable repo (caller applies a project fallback).
+ */
 function repoFromCwd(cwd: string | undefined): string {
-  if (!cwd) return "unknown";
-  const b = basename(cwd);
-  return b || "unknown";
+  if (!cwd) return "";
+  const cut = cwd.replace(/[/\\]\.claude[/\\].*$/, "");
+  const b = basename(cut || cwd);
+  return b;
+}
+
+/** Immediate child of `root` on the path to `file` (the Claude "project" dir). */
+function projectDirOf(root: string, file: string): string {
+  let rel = file.startsWith(root) ? file.slice(root.length) : file;
+  while (rel.startsWith(sep)) rel = rel.slice(1);
+  const seg = rel.split(sep)[0] ?? "";
+  return seg ? join(root, seg) : root;
+}
+
+/** First usable (sanitized) repo from any cwd line in a transcript file. */
+function firstCwdRepo(file: string): string {
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || !t.includes('"cwd"')) continue;
+    try {
+      const cwd = (JSON.parse(t) as RawLine).cwd;
+      const repo = repoFromCwd(cwd);
+      if (repo) return repo;
+    } catch {
+      /* tolerate */
+    }
+  }
+  return "";
 }
 
 interface RawLine {
@@ -73,7 +112,7 @@ interface RawLine {
  * Parse one transcript file into events. Session id comes from the sessionId
  * field when present, otherwise the file basename.
  */
-function parseFile(file: string): PixelEvent[] {
+function parseFile(file: string, fallbackRepo: string): PixelEvent[] {
   let text: string;
   try {
     text = readFileSync(file, "utf8");
@@ -87,7 +126,9 @@ function parseFile(file: string): PixelEvent[] {
   let firstTs: string | undefined;
   let lastTs: string | undefined;
   let session = fileSession;
-  let repo = "unknown";
+  // Entries lacking a usable cwd (or subagent worktrees, before sanitizing)
+  // inherit the parent project's repo — never a phantom "agent-<id>".
+  let repo = fallbackRepo || "unknown";
 
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
@@ -102,7 +143,7 @@ function parseFile(file: string): PixelEvent[] {
     const ts = raw.timestamp;
     if (!ts) continue;
     if (raw.sessionId) session = raw.sessionId;
-    if (raw.cwd) repo = repoFromCwd(raw.cwd);
+    if (raw.cwd) repo = repoFromCwd(raw.cwd) || fallbackRepo || "unknown";
     if (!firstTs) firstTs = ts;
     lastTs = ts;
 
@@ -161,9 +202,33 @@ function parseFile(file: string): PixelEvent[] {
 
 /** Parse all transcripts under `dir` into a ts-sorted PixelEvent[]. */
 export function parseClaudeHistory(dir: string): PixelEvent[] {
+  const files = [...walkJsonl(dir)];
+  // A "project" dir (immediate child of `dir`) encodes one repo's cwd; all its
+  // transcripts — main session AND subagent worktrees — share that repo. Derive
+  // a per-project fallback repo (sanitized) so cwd-less / worktree entries are
+  // attributed to the parent project instead of becoming phantom "agent-*" lots.
+  const fallbackByProject = new Map<string, string>();
+  const fallbackFor = (file: string): string => {
+    const proj = projectDirOf(dir, file);
+    let fb = fallbackByProject.get(proj);
+    if (fb === undefined) {
+      fb = "";
+      for (const f of files) {
+        if (projectDirOf(dir, f) !== proj) continue;
+        const r = firstCwdRepo(f);
+        if (r) {
+          fb = r;
+          break;
+        }
+      }
+      fallbackByProject.set(proj, fb);
+    }
+    return fb;
+  };
+
   const all: PixelEvent[] = [];
-  for (const file of walkJsonl(dir)) {
-    all.push(...parseFile(file));
+  for (const file of files) {
+    all.push(...parseFile(file, fallbackFor(file)));
   }
   all.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return all;
