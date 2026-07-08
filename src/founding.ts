@@ -56,12 +56,15 @@ export function ingestSources(sources: Sources): PixelEvent[] {
   return events;
 }
 
-/** Resolve the persistent seed: config wins, then an explicit override, else a
+/** Resolve the persistent seed: explicit override wins, then config, else a
  * machine+user derived stable seed. Persisted on found so resumes never drift. */
 function resolveSeed(root: string, override?: string): string {
   const cfg = readConfig(root);
-  if (cfg.seed) return cfg.seed;
+  // An EXPLICIT override (refound --seed) always wins over the pinned config
+  // seed — otherwise a user can never change their city's geography. found()
+  // persists the resolved seed back to config, so the new choice sticks.
   if (override) return override;
+  if (cfg.seed) return cfg.seed;
   // deriveSeed is deterministic given machine+user; keep it out of the compiler
   // (rule 2) — it only picks WHICH deterministic city, never mutates the fold.
   return deriveSeed(process.env.AGENTCITY_MACHINE ?? "agentcity", process.env.USER ?? "user");
@@ -76,7 +79,7 @@ export interface BootResult {
 }
 
 export interface FoundOptions {
-  seed?: string; // explicit override (CLI --seed); config.seed still wins
+  seed?: string; // explicit override (CLI --seed); beats config.seed and is persisted
   config?: Partial<CityConfig>;
 }
 
