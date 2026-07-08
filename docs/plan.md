@@ -136,6 +136,22 @@ novelty window is community-fed, not solo live-ops:
 Trust line, verbatim for all materials: "ambient data stays home; you
 choose what to exhibit."
 
+## 4f. Shareable cards (2026-07-08)
+
+Three families, all rendered 100% locally (canvas→PNG, no server):
+- **Moment cards** (auto-offered via toast): tier upgrades, landmarks, ship
+  arrivals/new repo, milestones, streaks, and decay ("RIP <repo> — 90 days
+  silent"). Close-up of the element + 2-3 stat lines + day-stamp.
+- **Postcard** (on demand): full-map beauty shot, HUD stripped, stamp corner
+  with seed-flag + day counter.
+- **Perspective cards** (scheduled): "The Daily Build" weekly newspaper,
+  district/work-mix report, founding anniversary.
+Export preview includes a visible "repo names ON/OFF" toggle (aliased mode
+for public posts). All cards carry pixel branding + day-stamp + seed-flag
+(provenance). Generated cards persist in a local **Album** (collection
+surface = retention). Strategic role: makes the share loop ambient
+(2-3 offers/week) instead of launch-only.
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
