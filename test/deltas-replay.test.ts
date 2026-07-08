@@ -1,0 +1,132 @@
+import { describe, it, expect } from "vitest";
+import { fold } from "../src/compiler.js";
+import { generateDemoEvents } from "../src/demo-events.js";
+import { stableStringify } from "../src/types.js";
+import type { CityDelta, CityModel } from "../src/types.js";
+
+// A reducer mirroring the renderer's (web/fixture-city.js): replaying the delta
+// stream must arrive at the same map state as a direct fold.
+function replay(deltas: CityDelta[]) {
+  const lotById = new Map<string, any>();
+  const roadById = new Map<string, any>();
+  const rails: any[] = [];
+  const chunks: any[] = [];
+  const landmarks: any[] = [];
+  let ships = 0;
+  let population = 0;
+  let pets = 0;
+  let streakDays = 0;
+  let allNighterYesterday = false;
+
+  for (const d of deltas) {
+    switch (d.kind) {
+      case "chunk.reveal":
+        chunks.push({ x: d.x, y: d.y });
+        break;
+      case "lot.found":
+        lotById.set(d.id as string, {
+          id: d.id,
+          repo: d.repo,
+          alias: d.alias,
+          category: d.category,
+          secondary: d.secondary,
+          pos: d.pos,
+          tier: d.tier,
+          decay: 0,
+          foundedDay: d.foundedDay,
+          variant: d.variant,
+        });
+        break;
+      case "lot.upgrade": {
+        const l = lotById.get(d.id as string);
+        if (l) l.tier = d.tier;
+        break;
+      }
+      case "lot.decay": {
+        const l = lotById.get(d.id as string);
+        if (l) l.decay = d.level;
+        break;
+      }
+      case "lot.renovate": {
+        const l = lotById.get(d.id as string);
+        if (l) l.decay = 0;
+        break;
+      }
+      case "road.add":
+        roadById.set(d.id as string, { id: d.id, path: d.path, tier: d.tier });
+        break;
+      case "road.upgrade": {
+        const r = roadById.get(d.id as string);
+        if (r) r.tier = d.tier;
+        break;
+      }
+      case "rail.add":
+        rails.push({ between: d.between, path: d.path });
+        break;
+      case "landmark.add":
+        landmarks.push({ kind: d.landmarkKind, pos: d.pos });
+        break;
+      case "ship.arrive":
+        ships++;
+        break;
+      case "population.set":
+        population = d.population as number;
+        pets = d.pets as number;
+        if (d.streakDays != null) streakDays = d.streakDays as number;
+        if (d.allNighterYesterday != null) allNighterYesterday = d.allNighterYesterday as boolean;
+        break;
+      default:
+        break;
+    }
+  }
+  return { lotById, roadById, rails, chunks, landmarks, ships, population, pets, streakDays, allNighterYesterday };
+}
+
+function lotProjection(m: CityModel) {
+  return m.lots
+    .map((l) => ({
+      id: l.id,
+      repo: l.repo,
+      alias: l.alias,
+      category: l.category,
+      secondary: l.secondary,
+      pos: l.pos,
+      tier: l.tier,
+      decay: l.decay,
+      foundedDay: l.foundedDay,
+      variant: l.variant,
+    }))
+    .sort((a, b) => (a.id < b.id ? -1 : 1));
+}
+
+describe("deltas replay == model (map state)", () => {
+  const { model, deltas } = fold(generateDemoEvents("replay-seed"), "replay-seed");
+  const r = replay(deltas);
+
+  it("lots reconstruct identically (id/pos/tier/decay/category)", () => {
+    const replayed = [...r.lotById.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+    expect(stableStringify(replayed)).toBe(stableStringify(lotProjection(model)));
+  });
+
+  it("roads reconstruct with matching tiers", () => {
+    const replayed = [...r.roadById.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
+    const expected = model.roads.map((rd) => ({ id: rd.id, path: rd.path, tier: rd.tier })).sort((a, b) => (a.id < b.id ? -1 : 1));
+    expect(stableStringify(replayed)).toBe(stableStringify(expected));
+  });
+
+  it("rails, chunks and landmarks reconstruct identically", () => {
+    expect(stableStringify(r.rails)).toBe(stableStringify(model.rails));
+    const chunks = r.chunks.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+    const mchunks = model.chunks.map((c) => ({ x: c.x, y: c.y })).sort((a, b) => a.x - b.x || a.y - b.y);
+    expect(stableStringify(chunks)).toBe(stableStringify(mchunks));
+    expect(stableStringify(r.landmarks)).toBe(stableStringify(model.landmarks.map((l) => ({ kind: l.kind, pos: l.pos }))));
+  });
+
+  it("stats (ships/pop/pets/streak/all-nighter) reconstruct from deltas", () => {
+    expect(r.ships).toBe(model.stats.ships);
+    expect(r.population).toBe(model.stats.population);
+    expect(r.pets).toBe(model.stats.pets);
+    expect(r.streakDays).toBe(model.stats.streakDays);
+    expect(r.allNighterYesterday).toBe(model.stats.allNighterYesterday);
+  });
+});

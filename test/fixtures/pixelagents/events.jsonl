@@ -1,0 +1,6 @@
+{"ts":"2026-05-05T09:00:00.000Z","session":"pa-1","agent":"user","source":"pixelagents","cwd":"/home/u/infra-repo","repo":"infra-repo","kind":"session.start"}
+{"ts":"2026-05-05T09:00:05.000Z","session":"pa-1","agent":"user","source":"pixelagents","cwd":"/home/u/infra-repo","repo":"infra-repo","kind":"tool.pre","tool":"Bash","detail":"docker build -t app ."}
+{this is a corrupt line that must be tolerated}
+{"ts":"2026-05-05T09:00:09.000Z","session":"pa-1","agent":"user","source":"pixelagents","cwd":"/home/u/infra-repo","repo":"infra-repo","kind":"tool.post","tool":"Bash","detail":"docker build -t app ."}
+{"ts":"2026-05-05T09:01:00.000Z","session":"pa-1","agent":"user","source":"pixelagents","cwd":"/home/u/infra-repo","repo":"infra-repo","kind":"turn.end"}
+{"ts":"2026-05-05T09:02:00.000Z","session":"pa-1","agent":"user","source":"pixelagents","cwd":"/home/u/infra-repo","repo":"infra-repo","kind":"session.end"}
