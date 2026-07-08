@@ -1,0 +1,828 @@
+<title>agentcity — album</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ink:#e8e4d8; --ink-dim:#a8a496; --panel:#161425; --panel2:#20203a;
+    --line:#3a3856; --gold:#ffcf7a; --cyan:#7fe3e0; --red:#ff6a5a; --green:#7fe3a0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#0c0b18;
+    background-image:
+      radial-gradient(1200px 500px at 50% -140px, #1a1832 0%, rgba(12,11,24,0) 70%);
+    color:var(--ink);
+    font-family:"Courier New",ui-monospace,monospace;
+    min-height:100vh; padding:0 0 60px;
+    -webkit-font-smoothing:none;
+  }
+
+  header#top{
+    text-align:center; padding:34px 16px 10px;
+  }
+  header#top .mark{
+    font-size:26px; font-weight:bold; letter-spacing:6px; color:var(--gold);
+    text-shadow:0 2px 0 rgba(0,0,0,.5);
+  }
+  header#top .sub{
+    margin-top:8px; font-size:12px; letter-spacing:3px; color:var(--ink-dim);
+    text-transform:uppercase;
+  }
+  header#top .sub b{color:var(--cyan);font-weight:normal;}
+  header#top .rule{
+    width:min(560px,80%); height:2px; margin:16px auto 0;
+    background:linear-gradient(90deg,rgba(58,56,86,0),var(--line),rgba(58,56,86,0));
+  }
+
+  #grid{
+    max-width:1080px; margin:26px auto 0; padding:0 18px;
+    display:grid; gap:22px;
+    grid-template-columns:repeat(auto-fill,minmax(300px,1fr));
+    align-items:start;
+  }
+  .card{
+    background:var(--panel); border:2px solid var(--line);
+    box-shadow:0 0 0 2px #0c0b18, 0 8px 0 rgba(0,0,0,.35);
+    padding:8px; cursor:pointer; position:relative;
+    transition:transform .18s ease, box-shadow .18s ease;
+  }
+  .card:hover{
+    transform:translateY(-6px);
+    box-shadow:0 0 0 2px #0c0b18, 0 14px 0 rgba(0,0,0,.4), 0 0 0 2px var(--line);
+    border-color:var(--gold);
+  }
+  .card canvas{
+    display:block; width:100%; height:auto;
+    image-rendering:pixelated; image-rendering:crisp-edges;
+  }
+  .card .cap{
+    display:flex; justify-content:space-between; align-items:baseline;
+    margin-top:7px; font-size:10px; letter-spacing:1px;
+  }
+  .card .cap .k{color:var(--gold);text-transform:uppercase;}
+  .card .cap .v{color:var(--ink-dim);}
+  .card.portrait{grid-row:span 2;}
+
+  footer#bot{
+    text-align:center; margin-top:34px; font-size:11px;
+    letter-spacing:2px; color:var(--ink-dim);
+  }
+  footer#bot b{color:var(--gold);font-weight:normal;}
+  footer#bot span{opacity:.4;padding:0 8px;}
+
+  /* ---- modal (export preview, HUD styled) ---- */
+  #overlay{
+    position:fixed; inset:0; z-index:50; display:none;
+    background:rgba(6,5,14,.82);
+    align-items:center; justify-content:center; padding:22px;
+    opacity:0; transition:opacity .16s ease;
+  }
+  #overlay.on{display:flex;opacity:1;}
+  #modal{
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:2px solid var(--line);
+    box-shadow:0 0 0 2px #0c0b18, 0 10px 0 rgba(0,0,0,.5);
+    max-width:min(960px,96vw); width:auto; max-height:94vh;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  #mHead{
+    display:flex; justify-content:space-between; align-items:center;
+    padding:10px 12px; border-bottom:2px solid var(--line); gap:12px;
+  }
+  #mHead .ti{font-size:13px;color:var(--gold);letter-spacing:1px;}
+  #mHead .ti small{display:block;color:var(--ink-dim);font-size:9px;letter-spacing:2px;margin-top:2px;text-transform:uppercase;}
+  #mClose{
+    font-family:inherit;font-size:16px;color:var(--ink);background:var(--panel2);
+    border:2px solid var(--line);width:28px;height:28px;cursor:pointer;line-height:1;flex:none;
+  }
+  #mClose:hover{color:var(--red);border-color:var(--red);}
+  #mStage{
+    padding:16px; display:flex; align-items:center; justify-content:center;
+    background:
+      repeating-linear-gradient(45deg,#0e0d1c 0 8px,#100f20 8px 16px);
+    overflow:auto; flex:1 1 auto; min-height:0;
+  }
+  #mCanvas{
+    image-rendering:pixelated; image-rendering:crisp-edges;
+    max-width:100%; max-height:64vh; width:auto; height:auto;
+    box-shadow:0 6px 0 rgba(0,0,0,.4);
+  }
+  #mCtrls{
+    display:flex; flex-wrap:wrap; gap:10px; align-items:center;
+    padding:11px 12px; border-top:2px solid var(--line);
+  }
+  .btn{
+    font-family:inherit; font-size:12px; letter-spacing:1px; color:var(--ink);
+    background:var(--panel2); border:2px solid var(--line); padding:7px 12px;
+    cursor:pointer; text-transform:uppercase;
+  }
+  .btn:hover{color:var(--gold);border-color:var(--gold);}
+  .btn.toggle .st{color:var(--cyan);}
+  .btn.toggle.off .st{color:var(--red);}
+  #mMsg{margin-left:auto;font-size:10px;letter-spacing:1px;color:var(--ink-dim);min-height:14px;}
+  #mMsg.ok{color:var(--green);}
+
+  @media (max-width:520px){
+    #mCtrls{gap:7px} .btn{font-size:11px;padding:6px 9px}
+    #mMsg{margin-left:0;width:100%}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .card{transition:none;}
+    .card:hover{transform:none;}
+    #overlay{transition:none;}
+  }
+</style>
+
+<header id="top">
+  <div class="mark">AGENTCITY</div>
+  <div class="sub">Album &middot; <b>6 moments captured</b></div>
+  <div class="rule"></div>
+</header>
+
+<main id="grid" aria-label="shareable cards"></main>
+
+<footer id="bot">
+  <b>rendered locally</b><span>&bull;</span>you choose what to share
+</footer>
+
+<div id="overlay" role="dialog" aria-modal="true">
+  <div id="modal" class="panel">
+    <div id="mHead">
+      <div class="ti" id="mTitle">card<small id="mSub">export preview</small></div>
+      <button id="mClose" title="close" aria-label="close">&times;</button>
+    </div>
+    <div id="mStage"><canvas id="mCanvas"></canvas></div>
+    <div id="mCtrls">
+      <button class="btn toggle" id="mToggle">repo names: <span class="st">ON</span></button>
+      <button class="btn" id="mDownload">download PNG</button>
+      <button class="btn" id="mCopy">copy</button>
+      <span id="mMsg"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+(()=>{
+"use strict";
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// ---------------------------------------------------------------- palette
+const WORK = {
+  code:"#d98a48", tests:"#5fb8d6", infra:"#9aa0aa",
+  api:"#4fc09a", research:"#9a76d6", planning:"#5f82d6", oldtown:"#b56a44",
+};
+const SEED_COLS = ["#ffcf7a","#7fe3e0","#ff6a5a","#7fe3a0","#5f82d6"];
+// maya's city seed identicon (3x3, symmetric)
+const SEED_GRID = [[1,0,2],[0,3,0],[2,0,1]];
+
+// ---------------------------------------------------------------- helpers
+function shade(hex,f){
+  const n=parseInt(hex.slice(1),16);
+  let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  r=Math.min(255,Math.round(r*f)); g=Math.min(255,Math.round(g*f)); b=Math.min(255,Math.round(b*f));
+  return "rgb("+r+","+g+","+b+")";
+}
+function poly(ctx,pts,fill,stroke){
+  ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x,pts[i].y);
+  ctx.closePath();
+  if(fill){ctx.fillStyle=fill;ctx.fill();}
+  if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke();}
+}
+function mulberry(a){
+  return function(){ a|=0;a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a);
+    t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; };
+}
+function skyGrad(ctx,W,H,stops){
+  const g=ctx.createLinearGradient(0,0,0,H);
+  for(const [p,c] of stops) g.addColorStop(p,c);
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+}
+function stars(ctx,W,maxY,n){
+  ctx.fillStyle="rgba(255,255,255,.5)";
+  for(let i=0;i<n;i++) ctx.fillRect((i*97)%W,(i*53)%maxY,1,1);
+}
+function vignette(ctx,W,H){
+  const vg=ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35,W/2,H/2,Math.max(W,H)*0.75);
+  vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(4,3,12,.5)");
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+}
+
+// iso building (matches iso-v3 face shading + windows)
+function faceWindows(ctx,A,B,H,cols,rows,litFn,litCol,offCol){
+  const dx=B.x-A.x, dy=B.y-A.y, mx=0.12,my=0.10;
+  const gw=(1-2*mx)/cols, gh=(1-2*my)/rows, ww=gw*0.62, wh=gh*0.6;
+  for(let r=0;r<rows;r++)for(let c=0;c<cols;c++){
+    const u0=mx+c*gw+(gw-ww)/2, v0=my+r*gh+(gh-wh)/2;
+    const on=litFn(c,r);
+    const p=(u,v)=>({x:A.x+dx*u,y:A.y+dy*u-H*v});
+    poly(ctx,[p(u0,v0),p(u0+ww,v0),p(u0+ww,v0+wh),p(u0,v0+wh)], on?litCol:offCol);
+  }
+}
+function bldg(ctx,iso,gx,gy,fw,fd,H,base,opt){
+  opt=opt||{};
+  const g=(x,y)=>iso.grid(x,y);
+  const gT=g(gx,gy),gR=g(gx+fw,gy),gB=g(gx+fw,gy+fd),gL=g(gx,gy+fd);
+  const tT={x:gT.x,y:gT.y-H},tR={x:gR.x,y:gR.y-H},tB={x:gB.x,y:gB.y-H},tL={x:gL.x,y:gL.y-H};
+  let topC,rightC,leftC;
+  if(opt.glass){topC=shade(base,1.55);rightC=shade(base,1.0);leftC=shade(base,0.62);}
+  else if(opt.ruin){topC=shade("#4a4636",1.25);rightC="#575344";leftC="#3c3a2e";}
+  else {topC=shade(base,1.35);rightC=shade(base,0.95);leftC=shade(base,0.6);}
+  poly(ctx,[gL,gB,tB,tL],leftC,"rgba(0,0,0,.35)");
+  poly(ctx,[gB,gR,tR,tB],rightC,"rgba(0,0,0,.25)");
+  poly(ctx,[tT,tR,tB,tL],topC,"rgba(0,0,0,.2)");
+  const seed=opt.seed||0, lit=opt.lit;
+  const cols=Math.max(1,fw*2), rows=Math.max(2,Math.floor(H/12));
+  const litCol="#ffcf7a", offCol=shade(base,0.42);
+  const litFn=(c,r)=> !opt.ruin && (((c*3+r*5+seed)%5) < (lit?3:2));
+  faceWindows(ctx,gL,gB,H,cols,rows,litFn,litCol,offCol);
+  faceWindows(ctx,gB,gR,H,cols,rows,(c,r)=>litFn(c+7,r),litCol,offCol);
+  if(opt.glass) poly(ctx,[tT,tR,tB,tL],"rgba(127,227,224,.18)");
+  if(opt.ruin){
+    ctx.fillStyle="#3f7a3a";
+    for(let i=0;i<12;i++){const u=((seed*7+i*13)%100)/100, v=((i*17)%100)/100;
+      ctx.fillRect(gL.x+(gB.x-gL.x)*u, gL.y+(gB.y-gL.y)*u-H*v,2,3);}
+    ctx.fillStyle="rgba(0,0,0,.4)"; ctx.fillRect((tT.x+tB.x)/2-2,tT.y-1,5,5);
+  }
+  if(opt.scaffold){
+    ctx.strokeStyle="#caa24a"; ctx.lineWidth=1;
+    ctx.strokeRect(tL.x, tT.y, (tR.x-tL.x),(gB.y-tT.y));
+    ctx.beginPath(); ctx.moveTo(tL.x,(tT.y+gB.y)/2); ctx.lineTo(tR.x,(tR.y+gR.y)/2); ctx.stroke();
+  }
+  return {gT,gR,gB,gL,tT,tR,tB,tL};
+}
+function tileD(ctx,iso,gx,gy,col){
+  const T=iso.grid(gx,gy),R=iso.grid(gx+1,gy),B=iso.grid(gx+1,gy+1),L=iso.grid(gx,gy+1);
+  poly(ctx,[T,R,B,L],col);
+  return [T,R,B,L];
+}
+
+// ---- shared chrome: wordmark + seed-flag pennant + day-stamp
+function wordmark(ctx,x,y,size){
+  size=size||13;
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.font="bold "+size+"px 'Courier New',monospace";
+  ctx.fillStyle="rgba(0,0,0,.55)"; ctx.fillText("AGENTCITY",x+1,y+1);
+  ctx.fillStyle="#ffcf7a"; ctx.fillText("AGENTCITY",x,y);
+}
+function pennant(ctx,x,y){
+  // pole
+  ctx.fillStyle="#2a2620"; ctx.fillRect(x,y,2,22);
+  ctx.fillStyle="#4a4436"; ctx.fillRect(x-1,y+21,4,2);
+  // triangular pennant
+  poly(ctx,[{x:x+2,y:y+1},{x:x+22,y:y+6},{x:x+2,y:y+13}],"#20203a","#3a3856");
+  // seed dots
+  ctx.fillStyle=SEED_COLS[0]; ctx.fillRect(x+5,y+4,2,2);
+  ctx.fillStyle=SEED_COLS[1]; ctx.fillRect(x+9,y+6,2,2);
+  ctx.fillStyle=SEED_COLS[3]; ctx.fillRect(x+13,y+7,2,2);
+}
+function dayStamp(ctx,rightX,topY,text){
+  ctx.font="bold 11px 'Courier New',monospace";
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  const w=ctx.measureText(text).width+16, h=18, x=rightX-w, y=topY;
+  ctx.fillStyle="rgba(12,11,24,.72)"; ctx.fillRect(x,y,w,h);
+  ctx.strokeStyle="#3a3856"; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,w-1,h-1);
+  ctx.fillStyle="#ffcf7a"; ctx.fillText(text,x+8,y+13);
+}
+function chrome(ctx,W,day){
+  wordmark(ctx,42,24,13);
+  pennant(ctx,14,8);
+  dayStamp(ctx,W-14,10,day);
+}
+// bottom banner for titles
+function banner(ctx,W,H,bh,title,stats,accent){
+  const g=ctx.createLinearGradient(0,H-bh-24,0,H);
+  g.addColorStop(0,"rgba(12,11,24,0)"); g.addColorStop(0.4,"rgba(12,11,24,.82)"); g.addColorStop(1,"rgba(10,9,20,.95)");
+  ctx.fillStyle=g; ctx.fillRect(0,H-bh-24,W,bh+24);
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.font="bold 18px 'Courier New',monospace";
+  ctx.fillStyle=accent||"#ffcf7a"; ctx.fillText(title,20,H-bh+6);
+  ctx.font="12px 'Courier New',monospace";
+  ctx.fillStyle="#a8a496"; ctx.fillText(stats,20,H-bh+26);
+}
+
+// small props ------------------------------------------------------------
+function crateStack(ctx,x,y,n){
+  const pos=[[0,0],[9,-2],[4,-11]];
+  for(let i=0;i<Math.min(n,3);i++){
+    const px=x+pos[i][0], py=y+pos[i][1];
+    ctx.fillStyle="#9a7a4a"; ctx.fillRect(px-4,py-8,8,8);
+    ctx.fillStyle="#b08a54"; ctx.fillRect(px-4,py-8,8,2);
+    ctx.strokeStyle="rgba(0,0,0,.35)"; ctx.lineWidth=1; ctx.strokeRect(px-3.5,py-7.5,7,7);
+    ctx.strokeStyle="#7a5a34"; ctx.beginPath(); ctx.moveTo(px-4,py-4);ctx.lineTo(px+4,py-4);ctx.stroke();
+  }
+}
+function drawShip(ctx,x,y,z){
+  poly(ctx,[{x:x-6*z,y:y-2*z},{x:x+6*z,y:y-2*z},{x:x+4*z,y:y+2.2*z},{x:x-4*z,y:y+2.2*z}],"#5a3a26");
+  ctx.fillStyle="#3a2418"; ctx.fillRect(x-4*z,y+1*z,8*z,1.3*z);
+  ctx.fillStyle="#8a6a44"; ctx.fillRect(x-4.5*z,y-3*z,9*z,1.4*z);
+  ctx.fillStyle="#4a3320"; ctx.fillRect(x-0.5*z,y-12*z,1*z,10*z);
+  ctx.fillStyle="#e8e0cc"; poly(ctx,[{x:x+0.7*z,y:y-12*z},{x:x+5.5*z,y:y-4.5*z},{x:x+0.7*z,y:y-4.5*z}],"#e8e0cc");
+  ctx.fillStyle="#cfc6ac"; poly(ctx,[{x:x-0.7*z,y:y-10*z},{x:x-4*z,y:y-4.5*z},{x:x-0.7*z,y:y-4.5*z}],"#cfc6ac");
+  // little flag on mast
+  ctx.fillStyle="#ff6a5a"; ctx.fillRect(x-0.5*z,y-12.5*z,3*z,1.5*z);
+}
+function confetti(ctx,x0,y0,w,h,n,seed){
+  if(REDUCE) return;
+  const r=mulberry(seed||7);
+  for(let i=0;i<n;i++){
+    const px=x0+r()*w, py=y0+r()*h;
+    ctx.fillStyle=SEED_COLS[Math.floor(r()*SEED_COLS.length)];
+    const s=2+Math.floor(r()*2);
+    ctx.fillRect(px,py,s,s);
+  }
+}
+
+// generic mini iso city (the "map miniature")
+function miniCity(ctx,o){
+  const {ox,oy,hw,hh,cols,rows,seed}=o;
+  const iso={grid:(gx,gy)=>({x:ox+(gx-gy)*hw,y:oy+(gx+gy)*hh})};
+  const r=mulberry(seed);
+  const cx=cols/2, cy=rows/2, R=o.R||Math.min(cols,cy)*0.95;
+  const cats=o.cats||["code","tests","infra","api","research","planning"];
+  const bmap={};
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+    const rr=Math.hypot(x-cx,y-cy);
+    const rv1=r(), rv2=r(), rv3=r(), rv4=r();
+    if(rr>R) { bmap[x+","+y]="skip"; continue; }
+    const water = (x+y) > (cols+rows-1)-o.shore;
+    if(water){ bmap[x+","+y]="water"; continue; }
+    if(rv1 < (o.density||0.5)){
+      const cat = o.forceCat || cats[Math.floor(rv2*cats.length)];
+      bmap[x+","+y]={h:(o.minH||5)+Math.floor(rv3*(o.maxH||26)), cat,
+        seed:Math.floor(rv4*1000), lit:rv2<0.62, glass:cat==="tests"};
+    } else bmap[x+","+y]="grass";
+  }
+  for(let s=0;s<cols+rows;s++){
+    for(let x=Math.max(0,s-rows+1);x<=Math.min(cols-1,s);x++){
+      const y=s-x; if(y<0||y>=rows)continue;
+      const cell=bmap[x+","+y];
+      if(cell==="skip") continue;
+      if(cell==="water"){
+        const [T]=[tileD(ctx,iso,x,y,"#2b567e")];
+        const c0=iso.grid(x,y), c2=iso.grid(x+1,y+1);
+        ctx.fillStyle=((x+y)&1)?"#356b93":"#265073";
+        ctx.fillRect((c0.x+c2.x)/2-3,(c0.y+c2.y)/2,6,1);
+        continue;
+      }
+      tileD(ctx,iso,x,y, ((x+y)&1)?"#356336":"#3c6b3a");
+      if(cell && cell.h) bldg(ctx,iso,x,y,1,1,cell.h,WORK[cell.cat],{lit:cell.lit,glass:cell.glass,seed:cell.seed});
+    }
+  }
+}
+
+// ==================================================================== CARDS
+function names(on){ return {
+  webshop: on?"webshop":"building-7",
+  billing: on?"billing-svc":"building-8",
+  legacy:  on?"legacy-api":"building-9",
+};}
+
+// 1 — TIER UPGRADE
+function drawTier(ctx,W,H,namesOn){
+  skyGrad(ctx,W,H,[[0,"#151330"],[0.5,"#2a2144"],[0.8,"#43304a"],[1,"#573a48"]]);
+  stars(ctx,W,H*0.42,26);
+  const iso={grid:(gx,gy)=>({x:280+(gx-gy)*26, y:170+(gx+gy)*13})};
+  // plaza
+  for(let y=0;y<4;y++)for(let x=0;x<4;x++)
+    tileD(ctx,iso,x,y, (x+y)&1?"#5f5a54":"#6b6660");
+  // back buildings
+  bldg(ctx,iso,0,0,1,1,96,WORK.code,{lit:1,seed:12});
+  bldg(ctx,iso,3,0,1,1,70,WORK.code,{lit:0,seed:44});
+  bldg(ctx,iso,0,3,1,1,60,WORK.code,{lit:1,seed:71});
+  // crane to the right (scaffolding just removed)
+  (function crane(){
+    const b=iso.grid(3,2);
+    ctx.strokeStyle="#e0b03a"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.moveTo(b.x,b.y); ctx.lineTo(b.x,b.y-150); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(b.x-4,b.y-150); ctx.lineTo(b.x-70,b.y-140); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(b.x-55,b.y-142); ctx.lineTo(b.x-55,b.y-120); ctx.stroke();
+    ctx.fillStyle="#e0b03a"; ctx.fillRect(b.x-58,b.y-120,6,5);
+  })();
+  // hero tower (tier 4 residential mid-rise, just topped out)
+  const g=bldg(ctx,iso,1,1,1,1,150,WORK.code,{lit:1,seed:7});
+  // roof cap
+  ctx.fillStyle=shade(WORK.code,1.6);
+  ctx.fillRect((g.tT.x+g.tB.x)/2-14, g.tT.y-6, 28, 6);
+  // floating tier tag
+  (function tag(){
+    const tx=(g.tT.x+g.tB.x)/2, ty=g.tT.y-24;
+    ctx.font="bold 11px 'Courier New',monospace"; ctx.textAlign="center"; ctx.textBaseline="middle";
+    const w=88;
+    ctx.fillStyle="rgba(12,11,24,.85)"; ctx.fillRect(tx-w/2,ty-10,w,20);
+    ctx.strokeStyle="#7fe3e0"; ctx.lineWidth=1; ctx.strokeRect(tx-w/2+.5,ty-9.5,w-1,19);
+    ctx.fillStyle="#a8a496"; ctx.fillText("TIER 3",tx-24,ty);
+    ctx.fillStyle="#7fe3e0"; ctx.fillText("→",tx+8,ty);
+    ctx.fillStyle="#ffcf7a"; ctx.fillText("4",tx+24,ty);
+    ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  })();
+  confetti(ctx,W*0.2,20,W*0.6,150,60,7);
+  vignette(ctx,W,H);
+  chrome(ctx,W,"DAY 47");
+  banner(ctx,W,H,50,(namesOn?"webshop":"building-7")+" reached Tier 4",
+    "day 47  ·  712 WU  ·  3rd tower in Residential District","#ffcf7a");
+}
+
+// 2 — SHIP ARRIVAL
+function drawShipCard(ctx,W,H,namesOn){
+  skyGrad(ctx,W,H,[[0,"#241a3a"],[0.42,"#4a2f48"],[0.66,"#8a4a44"],[0.8,"#c9743f"],[0.92,"#e0913f"]]);
+  stars(ctx,W,H*0.3,16);
+  // sun disc low
+  ctx.fillStyle="#ffcf7a"; ctx.fillRect(W*0.6-9,H*0.5-9,18,18);
+  ctx.fillStyle="rgba(255,207,122,.25)"; ctx.fillRect(W*0.6-16,H*0.5-16,32,32);
+  // sea
+  const seaTop=H*0.55;
+  const sg=ctx.createLinearGradient(0,seaTop,0,H);
+  sg.addColorStop(0,"#3a5a78"); sg.addColorStop(1,"#1d3d5c");
+  ctx.fillStyle=sg; ctx.fillRect(0,seaTop,W,H-seaTop);
+  ctx.fillStyle="rgba(255,207,122,.18)";
+  for(let i=0;i<6;i++) ctx.fillRect(W*0.6-24+i*2, H*0.5+16+i*8, 48-i*6, 2);
+  for(let i=0;i<26;i++){ const y=seaTop+8+ (i*7)%(H-seaTop-8);
+    ctx.fillStyle=((i&1)?"rgba(200,220,235,.12)":"rgba(255,207,122,.06)");
+    ctx.fillRect((i*53)%W, y, 10+(i%4)*6, 1); }
+  const iso={grid:(gx,gy)=>({x:180+(gx-gy)*22, y:150+(gx+gy)*11})};
+  // land + harbor building (api)
+  for(let y=0;y<3;y++)for(let x=0;x<2;x++) tileD(ctx,iso,x,y,(x+y)&1?"#356336":"#3c6b3a");
+  bldg(ctx,iso,0,0,1,1,64,WORK.api,{lit:1,seed:22});
+  bldg(ctx,iso,0,2,1,1,40,WORK.api,{lit:1,seed:5});
+  // wooden pier out over the water
+  (function pier(){
+    const p0=iso.grid(2,0),p1=iso.grid(6,0),p2=iso.grid(6,1),p3=iso.grid(2,1);
+    poly(ctx,[p0,p1,p2,p3],"#6a4a2e","#3a2418");
+    ctx.strokeStyle="#4a3018"; ctx.lineWidth=1;
+    for(let i=1;i<8;i++){ const t=i/8;
+      ctx.beginPath();
+      ctx.moveTo(p0.x+(p1.x-p0.x)*t, p0.y+(p1.y-p0.y)*t);
+      ctx.lineTo(p3.x+(p2.x-p3.x)*t, p3.y+(p2.y-p3.y)*t); ctx.stroke();
+    }
+  })();
+  // crates on pier
+  crateStack(ctx, iso.grid(3.5,0.5).x, iso.grid(3.5,0.5).y, 3);
+  // ship at dock
+  drawShip(ctx, iso.grid(6.6,0.5).x, iso.grid(6.6,0.5).y+6, 3.4);
+  // foam
+  ctx.fillStyle="rgba(200,220,235,.3)";
+  for(let i=0;i<4;i++) ctx.fillRect(iso.grid(6.6,0.5).x+18+i*6, iso.grid(6.6,0.5).y+18+i*4, 6,2);
+  // gulls
+  ctx.strokeStyle="#e8e4d8"; ctx.lineWidth=1.5;
+  [[W*0.4,60],[W*0.5,44],[W*0.62,72]].forEach(([gx,gy])=>{
+    ctx.beginPath(); ctx.moveTo(gx-4,gy);ctx.lineTo(gx,gy-3);ctx.lineTo(gx+4,gy); ctx.stroke();
+  });
+  vignette(ctx,W,H);
+  chrome(ctx,W,"DAY 51");
+  banner(ctx,W,H,50,"⚓ new repo founded: "+(namesOn?"billing-svc":"building-8"),
+    "day 51  ·  12th building  ·  founding bonus +25 WU","#7fe3a0");
+}
+
+// 3 — RIP / DECAY
+function drawRip(ctx,W,H,namesOn){
+  skyGrad(ctx,W,H,[[0,"#12141f"],[0.5,"#232838"],[0.82,"#33403c"],[1,"#3d4a3c"]]);
+  stars(ctx,W,H*0.4,20);
+  // pale moon
+  ctx.fillStyle="#c9c6b4"; ctx.beginPath(); ctx.arc(W*0.72,60,16,0,7); ctx.fill();
+  ctx.fillStyle="#23283a"; ctx.beginPath(); ctx.arc(W*0.75,56,15,0,7); ctx.fill();
+  const iso={grid:(gx,gy)=>({x:300+(gx-gy)*26, y:180+(gx+gy)*13})};
+  for(let y=0;y<3;y++)for(let x=0;x<3;x++)
+    tileD(ctx,iso,x,y,(x+y)&1?"#2e4a2c":"#35502f");
+  // the ruin
+  const g=bldg(ctx,iso,1,0,1,1,110,WORK.code,{ruin:1,seed:33});
+  // extra crumble on right face
+  ctx.fillStyle="rgba(0,0,0,.35)";
+  ctx.fillRect(g.tB.x-6,g.tB.y+10,10,26);
+  // a single pixel crow perched on the broken top
+  (function crow(){
+    const cx=(g.tT.x+g.tB.x)/2+6, cy=g.tT.y-2;
+    ctx.fillStyle="#14161d";
+    ctx.fillRect(cx-3,cy-4,6,5);      // body
+    ctx.fillRect(cx+2,cy-6,3,3);      // head
+    ctx.fillRect(cx+5,cy-5,2,1);      // beak
+    ctx.fillRect(cx-6,cy-3,3,2);      // tail
+    ctx.fillStyle="#ff6a5a"; ctx.fillRect(cx+3,cy-5,1,1); // eye
+  })();
+  // headstone in front
+  (function stone(){
+    const s=iso.grid(0.5,2.6);
+    ctx.fillStyle="#6b6660"; ctx.fillRect(s.x-8,s.y-18,16,20);
+    ctx.beginPath(); ctx.fillStyle="#6b6660"; ctx.arc(s.x,s.y-18,8,Math.PI,0); ctx.fill();
+    ctx.fillStyle="#4a4640"; ctx.fillRect(s.x-9,s.y+1,18,4);
+    ctx.fillStyle="#2a2824"; ctx.font="bold 7px 'Courier New',monospace"; ctx.textAlign="center";
+    ctx.fillText("R.I.P",s.x,s.y-12); ctx.textAlign="left";
+    ctx.strokeStyle="#3f7a3a"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(s.x-8,s.y+2); ctx.lineTo(s.x-4,s.y-6); ctx.stroke();
+  })();
+  // dead weeds
+  ctx.strokeStyle="#5a5a3a"; ctx.lineWidth=1;
+  for(let i=0;i<10;i++){ const wx=120+i*38, wy=H-70+ (i%3)*4;
+    ctx.beginPath(); ctx.moveTo(wx,wy); ctx.lineTo(wx-2,wy-8); ctx.moveTo(wx,wy);ctx.lineTo(wx+3,wy-6); ctx.stroke(); }
+  vignette(ctx,W,H);
+  chrome(ctx,W,"DAY 141");
+  banner(ctx,W,H,50,"RIP  "+(namesOn?"legacy-api":"building-9"),
+    "90 days silent  ·  Tier 3 in its prime  ·  vines have the deploy now","#a8a496");
+}
+
+// 4 — POSTCARD
+function drawPostcard(ctx,W,H){
+  skyGrad(ctx,W,H,[[0,"#1a1636"],[0.45,"#3a2850"],[0.7,"#7a4658"],[0.88,"#c9743f"]]);
+  stars(ctx,W,H*0.3,18);
+  miniCity(ctx,{ox:W/2,oy:70,hw:9,hh:4.5,cols:34,rows:30,seed:94123,
+    R:14,shore:9,density:0.5,minH:6,maxH:34});
+  // reflection glow near water
+  vignette(ctx,W,H);
+  // greeting (postcard script)
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.font="italic 15px Georgia,'Times New Roman',serif";
+  ctx.fillStyle="rgba(0,0,0,.5)"; ctx.fillText("greetings from",23,H-45);
+  ctx.fillStyle="#e8e4d8"; ctx.fillText("greetings from",22,H-46);
+  ctx.font="bold 22px Georgia,'Times New Roman',serif";
+  ctx.fillStyle="#ffcf7a"; ctx.fillText("MAYA'S CITY",22,H-20);
+  // postmark circle (double ring + cancellation + rotated text)
+  (function postmark(){
+    const px=W-96, py=54, R=34;
+    ctx.strokeStyle="rgba(232,228,216,.85)"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(px,py,R,0,7); ctx.stroke();
+    ctx.lineWidth=1; ctx.beginPath(); ctx.arc(px,py,R-5,0,7); ctx.stroke();
+    ctx.save(); ctx.translate(px,py);
+    ctx.fillStyle="rgba(232,228,216,.9)"; ctx.font="bold 8px 'Courier New',monospace";
+    ctx.textAlign="center";
+    const txt="• AGENTCITY • DAY 94 •", n=txt.length;
+    for(let i=0;i<n;i++){ const a=(i/n)*Math.PI*2 - Math.PI/2;
+      ctx.save(); ctx.rotate(a); ctx.translate(0,-(R-14)); ctx.fillText(txt[i],0,0); ctx.restore(); }
+    ctx.font="bold 9px 'Courier New',monospace"; ctx.fillText("DAY",0,-2); ctx.fillText("94",0,9);
+    ctx.restore();
+    // cancellation wavy lines
+    ctx.strokeStyle="rgba(232,228,216,.7)"; ctx.lineWidth=1.5;
+    for(let i=0;i<4;i++){ const y=py-9+i*6;
+      ctx.beginPath(); ctx.moveTo(px+R-4,y); ctx.lineTo(px+R+40,y-2); ctx.stroke(); }
+  })();
+  // postage stamp corner (top-right), perforated, holds seed-flag
+  (function stamp(){
+    const sw=52, sh=62, sx=W-sw-14, sy=12;
+    // perforation: white scalloped bg
+    ctx.fillStyle="#e8e4d8"; ctx.fillRect(sx-2,sy-2,sw+4,sh+4);
+    ctx.fillStyle="#0c0b18";
+    for(let i=0;i<Math.ceil((sw+4)/6);i++){ ctx.fillRect(sx-2+i*6,sy-4,3,3); ctx.fillRect(sx-2+i*6,sy+sh,3,3); }
+    for(let i=0;i<Math.ceil((sh+4)/6);i++){ ctx.fillRect(sx-4,sy-2+i*6,3,3); ctx.fillRect(sx+sw,sy-2+i*6,3,3); }
+    // stamp interior
+    const ig=ctx.createLinearGradient(sx,sy,sx,sy+sh);
+    ig.addColorStop(0,"#2a2144"); ig.addColorStop(1,"#3a2850");
+    ctx.fillStyle=ig; ctx.fillRect(sx+2,sy+2,sw-4,sh-4);
+    ctx.strokeStyle="#20203a"; ctx.lineWidth=1; ctx.strokeRect(sx+2.5,sy+2.5,sw-5,sh-5);
+    // seed-flag identicon
+    const gx=sx+sw/2-12, gy=sy+8, cell=8;
+    for(let r=0;r<3;r++)for(let c=0;c<3;c++){ const v=SEED_GRID[r][c];
+      if(v){ ctx.fillStyle=SEED_COLS[v]; ctx.fillRect(gx+c*cell,gy+r*cell,cell-1,cell-1); } }
+    ctx.fillStyle="#ffcf7a"; ctx.font="bold 8px 'Courier New',monospace"; ctx.textAlign="center";
+    ctx.fillText("SEED",sx+sw/2,sy+sh-12); ctx.fillText("· 1 ·",sx+sw/2,sy+sh-3);
+    ctx.textAlign="left";
+  })();
+  wordmark(ctx,16,26,13);
+  pennant(ctx,W-16,H-30);
+}
+
+// 5 — THE DAILY BUILD (portrait newspaper)
+function drawNewspaper(ctx,W,H){
+  // aged paper
+  const pg=ctx.createLinearGradient(0,0,0,H);
+  pg.addColorStop(0,"#e6dcc2"); pg.addColorStop(1,"#d8ccac");
+  ctx.fillStyle=pg; ctx.fillRect(0,0,W,H);
+  // paper speckle
+  const r=mulberry(555); ctx.fillStyle="rgba(90,70,40,.10)";
+  for(let i=0;i<180;i++) ctx.fillRect(r()*W,r()*H,1,1);
+  const ink="#1a1712", inkDim="#4a4234", M=20;
+  ctx.fillStyle=ink;
+  // top dateline
+  ctx.font="9px 'Courier New',monospace"; ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.fillText("AGENTCITY HERALD",M,26);
+  ctx.textAlign="right"; ctx.fillText("DAY 94 · CLEAR · 25°",W-M,26);
+  ctx.textAlign="left";
+  ctx.fillRect(M,30,W-2*M,1);
+  // masthead
+  ctx.textAlign="center";
+  ctx.font="bold 34px Georgia,'Times New Roman',serif";
+  ctx.fillText("The Daily Build",W/2,66);
+  ctx.font="9px 'Courier New',monospace"; ctx.fillStyle=inkDim;
+  ctx.fillText("•  BUILT LOCALLY, ONE COMMIT AT A TIME  •",W/2,80);
+  ctx.fillStyle=ink; ctx.fillRect(M,86,W-2*M,2);
+  ctx.textAlign="left";
+  // headline
+  ctx.font="bold 20px Georgia,serif"; ctx.fillStyle=ink;
+  ctx.fillText("GLASS QUARTER RISES:",M,112);
+  ctx.font="bold 15px Georgia,serif";
+  ctx.fillText("THIRD TEST-TOWER TOPS OUT",M,132);
+  ctx.fillRect(M,140,W-2*M,1);
+  // framed iso "photo"
+  const px=M, py=150, pw=W-2*M, ph=150;
+  ctx.fillStyle="#0c0b18"; ctx.fillRect(px,py,pw,ph);
+  ctx.save(); ctx.beginPath(); ctx.rect(px,py,pw,ph); ctx.clip();
+  skyGrad(ctx,W,py+ph,[[0,"#151330"],[1,"#3a2850"]]); // limited
+  ctx.fillStyle="#181433"; ctx.fillRect(px,py,pw,ph);
+  miniCity(ctx,{ox:px+pw/2,oy:py+34,hw:12,hh:6,cols:12,rows:12,seed:7788,
+    R:6,shore:10,density:0.7,minH:14,maxH:52,forceCat:"tests"});
+  ctx.restore();
+  ctx.strokeStyle=ink; ctx.lineWidth=2; ctx.strokeRect(px+1,py+1,pw-2,ph-2);
+  ctx.fillStyle=inkDim; ctx.font="italic 9px Georgia,serif";
+  ctx.fillText("Above: the glass district at dusk, seen from Old Town.",M,py+ph+13);
+  // two sub-stories in columns
+  const colY=py+ph+26, colW=(pw-14)/2;
+  drawStory(ctx,M,colY,colW,ink,inkDim,"Population hits 15",
+    ["Seven citizens now walk the","harbor road at dusk. Two dogs","reported near the CI foundry.","'The streets feel alive,' says","the lamplighter of District 3."]);
+  drawStory(ctx,M+colW+14,colY,colW,ink,inkDim,"Storm delays harbor",
+    ["Procedural weather rolled fog","across the docks. One cargo","ship holds offshore. Founding","of a new repo postponed to","the next clear morning."]);
+  // column rule
+  ctx.fillStyle=inkDim; ctx.fillRect(M+colW+6,colY-10,1,120);
+  // barcode + footer
+  const by=H-34;
+  ctx.fillStyle=ink;
+  let bx=M; const br=mulberry(94);
+  while(bx<M+120){ const bw=1+Math.floor(br()*3); ctx.fillRect(bx,by,bw,22); bx+=bw+1+Math.floor(br()*2); }
+  ctx.font="8px 'Courier New',monospace"; ctx.fillText("0  94  2026  AGENTCITY",M,by+30);
+  ctx.textAlign="right"; ctx.font="bold 26px Georgia,serif";
+  ctx.fillText("Nº 94",W-M,by+24); ctx.textAlign="left";
+  // seed-flag pennant (dark, on paper)
+  pennant(ctx,W-M-4,90);
+}
+function drawStory(ctx,x,y,w,ink,dim,head,lines){
+  ctx.fillStyle=ink; ctx.textAlign="left";
+  ctx.font="bold 11px Georgia,serif"; ctx.fillText(head,x,y);
+  ctx.fillRect(x,y+4,w,1);
+  ctx.font="9px 'Courier New',monospace"; ctx.fillStyle=dim;
+  lines.forEach((ln,i)=> ctx.fillText(ln,x,y+18+i*12));
+}
+
+// 6 — STREAK
+function drawStreak(ctx,W,H){
+  skyGrad(ctx,W,H,[[0,"#151330"],[1,"#241a36"]]);
+  stars(ctx,W,H*0.5,24);
+  ctx.fillStyle="#16142530"; ctx.fillRect(0,0,W,H);
+  // title
+  ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+  ctx.font="bold 22px 'Courier New',monospace"; ctx.fillStyle="#ffcf7a";
+  ctx.fillText("14-day building streak",70,46);
+  flame(ctx,44,40,1.5);
+  ctx.font="11px 'Courier New',monospace"; ctx.fillStyle="#a8a496";
+  ctx.fillText("each tile = that day's skyline delta",70,64);
+  // day tiles
+  const n=14, gap=6, pad=26, avail=W-2*pad;
+  const sz=Math.min(38,(avail-(n-1)*gap)/n);
+  const totalW=n*sz+(n-1)*gap, startX=(W-totalW)/2, ty=92;
+  const r=mulberry(1414);
+  for(let i=0;i<n;i++){
+    const x=startX+i*(sz+gap);
+    dayTile(ctx,x,ty,sz,i,n,r);
+  }
+  // stat row
+  ctx.textAlign="center";
+  ctx.font="bold 30px 'Courier New',monospace"; ctx.fillStyle="#ffcf7a";
+  ctx.fillText("+412 WU",W/2,H-52);
+  ctx.font="11px 'Courier New',monospace"; ctx.fillStyle="#a8a496";
+  ctx.fillText("this streak  ·  longest yet  ·  don't break the chain",W/2,H-34);
+  ctx.textAlign="left";
+  vignette(ctx,W,H);
+  chrome(ctx,W,"DAY 94");
+}
+function dayTile(ctx,x,y,sz,i,n,r){
+  const last=i===n-1;
+  ctx.fillStyle="#161425"; ctx.fillRect(x,y,sz,sz);
+  ctx.strokeStyle=last?"#ff8a4a":"#3a3856"; ctx.lineWidth=last?2:1;
+  ctx.strokeRect(x+.5,y+.5,sz-1,sz-1);
+  // mini iso ground + growing skyline
+  const ox=x+sz/2, oy=y+sz*0.72, hw=sz*0.2, hh=sz*0.1;
+  const iso={grid:(gx,gy)=>({x:ox+(gx-gy)*hw, y:oy+(gx+gy)*hh})};
+  tileD(ctx,iso,0,0,"#2a2840");
+  const cats=["code","tests","infra","api","research","planning"];
+  const growth=(i+1)/n;
+  const h1=4+growth*(sz*0.7)*(0.6+r()*0.5);
+  bldg(ctx,iso,0,0,1,1,h1,WORK[cats[i%cats.length]],{lit:r()<0.6,seed:i*13});
+  if(i>2){ const h2=3+growth*(sz*0.4)*(0.5+r()*0.6);
+    bldg(ctx,iso,1,0,1,1,h2,WORK[cats[(i+2)%cats.length]],{lit:r()<0.5,seed:i*7}); }
+  // day number
+  ctx.fillStyle=last?"#ffcf7a":"#a8a496"; ctx.textAlign="center"; ctx.textBaseline="alphabetic";
+  ctx.font="7px 'Courier New',monospace"; ctx.fillText("d"+(81+i),x+sz/2,y+sz-3);
+  ctx.textAlign="left";
+  if(last) flame(ctx,x+sz/2,y-2,0.8);
+}
+function flame(ctx,x,y,s){
+  poly(ctx,[{x:x,y:y-16*s},{x:x+7*s,y:y-4*s},{x:x+4*s,y:y+2*s},{x:x-4*s,y:y+2*s},{x:x-7*s,y:y-4*s}],"#ff6a3a");
+  poly(ctx,[{x:x,y:y-11*s},{x:x+4*s,y:y-3*s},{x:x+2*s,y:y+1*s},{x:x-2*s,y:y+1*s},{x:x-4*s,y:y-3*s}],"#ffcf7a");
+  ctx.fillStyle="#fff2c8"; ctx.fillRect(x-1*s,y-6*s,2*s,3*s);
+}
+
+// ==================================================================== SETUP
+const CARDS=[
+  {id:"tier", w:600,h:340, day:"DAY 47", named:true, k:"tier upgrade",
+   title:on=>(on?"webshop":"building-7")+" reached Tier 4", draw:drawTier},
+  {id:"ship", w:600,h:340, day:"DAY 51", named:true, k:"ship arrival",
+   title:on=>"new repo: "+(on?"billing-svc":"building-8"), draw:drawShipCard},
+  {id:"rip",  w:600,h:340, day:"DAY 141", named:true, k:"rip / decay",
+   title:on=>"RIP "+(on?"legacy-api":"building-9"), draw:drawRip},
+  {id:"post", w:600,h:340, day:"DAY 94", named:false, k:"postcard",
+   title:()=>"greetings from maya's city", draw:(c,w,h)=>drawPostcard(c,w,h)},
+  {id:"news", w:400,h:500, day:"DAY 94", named:false, k:"the daily build",
+   title:()=>"the daily build — Nº94", draw:(c,w,h)=>drawNewspaper(c,w,h)},
+  {id:"streak",w:600,h:340, day:"DAY 94", named:false, k:"14-day streak",
+   title:()=>"14-day building streak", draw:(c,w,h)=>drawStreak(c,w,h)},
+];
+
+let NAMES_ON=true;
+const DPR=Math.max(1,Math.min(2,window.devicePixelRatio||1));
+
+function paint(canvas,def,mult){
+  const s=mult*DPR;
+  canvas.width=Math.round(def.w*s);
+  canvas.height=Math.round(def.h*s);
+  const ctx=canvas.getContext("2d");
+  ctx.setTransform(s,0,0,s,0,0);
+  ctx.imageSmoothingEnabled=false;
+  // clip to inner frame region, draw scene, then frame
+  ctx.save();
+  ctx.beginPath(); ctx.rect(4,4,def.w-8,def.h-8); ctx.clip();
+  def.draw(ctx,def.w,def.h,NAMES_ON);
+  ctx.restore();
+  // frame
+  ctx.strokeStyle="#0c0b18"; ctx.lineWidth=8; ctx.strokeRect(4,4,def.w-8,def.h-8);
+  ctx.strokeStyle="#3a3856"; ctx.lineWidth=2; ctx.strokeRect(4,4,def.w-8,def.h-8);
+}
+
+const grid=document.getElementById("grid");
+const galleryCanvas={};
+for(const def of CARDS){
+  const card=document.createElement("div");
+  card.className="card"+(def.h>def.w?" portrait":"");
+  card.tabIndex=0; card.setAttribute("role","button");
+  card.setAttribute("aria-label","open "+def.k+" card");
+  const cv=document.createElement("canvas");
+  paint(cv,def,2);
+  galleryCanvas[def.id]=cv;
+  const cap=document.createElement("div");
+  cap.className="cap";
+  cap.innerHTML='<span class="k">'+def.k+'</span><span class="v">'+def.day+'</span>';
+  card.appendChild(cv); card.appendChild(cap);
+  card.addEventListener("click",()=>openModal(def));
+  card.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){e.preventDefault();openModal(def);} });
+  grid.appendChild(card);
+}
+
+// ---- modal ----
+const overlay=document.getElementById("overlay");
+const mCanvas=document.getElementById("mCanvas");
+const mTitle=document.getElementById("mTitle");
+const mSub=document.getElementById("mSub");
+const mToggle=document.getElementById("mToggle");
+const mMsg=document.getElementById("mMsg");
+let current=null;
+
+function refreshToggleBtn(){
+  mToggle.classList.toggle("off",!NAMES_ON);
+  mToggle.querySelector(".st").textContent=NAMES_ON?"ON":"OFF";
+}
+function setTitle(def){
+  mTitle.childNodes[0].nodeValue=def.title(NAMES_ON);
+  mSub.textContent=def.k+" · "+def.w+"×"+def.h+(def.named?" · has repo name":"");
+}
+function openModal(def){
+  current=def; mMsg.textContent=""; mMsg.className="";
+  paint(mCanvas,def,3);
+  setTitle(def); refreshToggleBtn();
+  overlay.classList.add("on");
+}
+function closeModal(){ overlay.classList.remove("on"); current=null; }
+
+document.getElementById("mClose").addEventListener("click",closeModal);
+overlay.addEventListener("click",e=>{ if(e.target===overlay) closeModal(); });
+document.addEventListener("keydown",e=>{ if(e.key==="Escape"&&overlay.classList.contains("on")) closeModal(); });
+
+mToggle.addEventListener("click",()=>{
+  NAMES_ON=!NAMES_ON;
+  refreshToggleBtn();
+  // re-render everything so the album reflects the choice
+  for(const def of CARDS) paint(galleryCanvas[def.id],def,2);
+  if(current){ paint(mCanvas,current,3); setTitle(current); }
+  msg(NAMES_ON?"repo names shown":"repo names hidden (aliased)",false);
+});
+
+function msg(t,ok){ mMsg.textContent=t; mMsg.className=ok?"ok":""; }
+
+document.getElementById("mDownload").addEventListener("click",()=>{
+  if(!current) return;
+  mCanvas.toBlob(b=>{
+    if(!b){ msg("export failed",false); return; }
+    const url=URL.createObjectURL(b);
+    const a=document.createElement("a");
+    a.href=url; a.download="agentcity-"+current.id+(NAMES_ON?"":"-anon")+".png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    msg("downloaded PNG",true);
+  },"image/png");
+});
+
+document.getElementById("mCopy").addEventListener("click",()=>{
+  if(!current) return;
+  if(!(navigator.clipboard && window.ClipboardItem)){ msg("copy unavailable — use download",false); return; }
+  mCanvas.toBlob(async b=>{
+    try{
+      await navigator.clipboard.write([new ClipboardItem({"image/png":b})]);
+      msg("copied to clipboard",true);
+    }catch(e){ msg("copy blocked — use download",false); }
+  },"image/png");
+});
+})();
+</script>
