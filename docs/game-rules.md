@@ -81,6 +81,22 @@ Events convert to WU (the only way anything gets built):
   is annexed in the current growth direction (weighted random, seed-fed).
   Survey stakes appear in fog a chunk ahead (foreshadowing).
 
+### 5b. Spacing & streets (amended 2026-07-08, dogfood feedback)
+
+- No two lots on orthogonally-adjacent tiles: every building keeps a 1-tile
+  clear ring (road or ground, never another lot).
+- Streets first: a new lot must front a road tile; the network extends to
+  reach it before the building rises.
+- Blocks stay small: max ~2x2 lot clusters before a street cuts through.
+- Road hierarchy: lane (dirt, 1 tile) -> street (cobble) -> paved -> AVENUE
+  (top usage tier, 2 tiles wide). Busy corridors literally widen.
+
+### 5c. Construction staging (renderer)
+
+Never roof-first: dirt+stakes -> foundation -> scaffold + walls rising floor
+by floor -> roof LAST -> scaffold off. Upgrades: scaffold wraps, new floor
+rises, roof lifts back. Timelapse compresses stages; live plays them.
+
 ## 6. Uniqueness (no two cities alike)
 
 Seed = hash(machine-id + user) determines:
