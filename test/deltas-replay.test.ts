@@ -148,12 +148,30 @@ describe("deltas replay == model (map state)", () => {
     expect(stableStringify(replayed)).toBe(stableStringify(expected));
   });
 
-  it("rails, chunks and landmarks reconstruct identically", () => {
+  it("rails and landmarks reconstruct identically", () => {
     expect(stableStringify(r.rails)).toBe(stableStringify(model.rails));
-    const chunks = r.chunks.slice().sort((a, b) => a.x - b.x || a.y - b.y);
-    const mchunks = model.chunks.map((c) => ({ x: c.x, y: c.y })).sort((a, b) => a.x - b.x || a.y - b.y);
-    expect(stableStringify(chunks)).toBe(stableStringify(mchunks));
     expect(stableStringify(r.landmarks)).toBe(stableStringify(model.landmarks.map((l) => ({ kind: l.kind, pos: l.pos }))));
+  });
+
+  it("model chunks are ALL revealed from day 0 (fog-of-war removed)", () => {
+    // full terrain visible: every chunk of the 6x6 world is revealed on day 0.
+    expect(model.chunks.length).toBe(36);
+    expect(model.chunks.every((c) => c.revealed && c.revealedDay === 0)).toBe(true);
+  });
+
+  it("chunk.reveal deltas are 'district surveyed' moments (subset of the map)", () => {
+    // No longer emitted for map-existence; each carries {surveyed:true} and must
+    // land on a real chunk of the (all-revealed) model.
+    const surveyDeltas = deltas.filter((d) => d.kind === "chunk.reveal");
+    expect(surveyDeltas.length).toBeGreaterThan(0);
+    const mchunks = new Set(model.chunks.map((c) => `${c.x},${c.y}`));
+    for (const d of surveyDeltas) {
+      expect(d.surveyed).toBe(true);
+      expect(mchunks.has(`${d.x},${d.y}`)).toBe(true);
+    }
+    // the founding district (center 2x2) is surveyed on day 0
+    const day0 = new Set(surveyDeltas.filter((d) => d.day === 0).map((d) => `${d.x},${d.y}`));
+    for (const k of ["2,2", "2,3", "3,2", "3,3"]) expect(day0.has(k)).toBe(true);
   });
 
   it("stats (ships/pop/pets/streak/all-nighter) reconstruct from deltas", () => {

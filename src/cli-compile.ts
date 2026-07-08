@@ -72,6 +72,7 @@ function summarize(model: CityModel, deltaCount: number): string {
     `roads=${model.roads.length}`,
     `rails=${model.rails.length}`,
     `chunks=${model.chunks.length}`,
+    `revealed=${model.chunks.filter((c) => c.revealed).length}/${model.chunks.length}`,
     `landmarks=${model.landmarks.length}`,
     `pop=${model.stats.population}`,
     `ships=${model.stats.ships}`,

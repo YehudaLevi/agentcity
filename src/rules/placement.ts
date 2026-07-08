@@ -30,7 +30,9 @@ export interface Geo {
   ground: Cell[][];
   occupied: Set<string>;
   roadSet: Set<string>;
-  revealed: Set<string>; // chunk keys "cx,cy"
+  surveyed: Set<string>; // chunk keys "cx,cy" that growth has "surveyed" (log
+  // moments only — terrain is fully visible from day 0, so this NO LONGER gates
+  // visibility or placement; see isRevealed below).
   lotsGeo: { x: number; y: number; cat: Category }[];
 }
 
@@ -166,10 +168,12 @@ export function chunkOf(x: number, y: number): { cx: number; cy: number } {
   return { cx: Math.floor(x / CHUNK), cy: Math.floor(y / CHUNK) };
 }
 
-export function isRevealed(g: Geo, x: number, y: number): boolean {
-  if (!inBounds(x, y)) return false;
-  const { cx, cy } = chunkOf(x, y);
-  return g.revealed.has(chKey(cx, cy));
+// Fog-of-war removed (game-rules §5, amended 2026-07-09): the FULL terrain is
+// generated and visible from day 0, so "revealed" == "in bounds". Kept as a
+// named predicate (rather than inlining inBounds) so placement reads as
+// "is this tile on the visible map"; the `g` arg is unused by design.
+export function isRevealed(_g: Geo, x: number, y: number): boolean {
+  return inBounds(x, y);
 }
 
 export function isWater(g: Geo, x: number, y: number): boolean {
@@ -415,11 +419,7 @@ function affinitySpot(g: Geo, cat: Category, kb: string): Coord | null {
 export function ensureWaterNeighbor(g: Geo, spot: Coord, _kb: string): void {
   const [sx, sy] = spot;
   for (const [ox, oy] of NEIGHBORS) {
-    if (isWater(g, sx + ox, sy + oy)) {
-      const { cx, cy } = chunkOf(sx + ox, sy + oy);
-      g.revealed.add(chKey(cx, cy)); // make sure it counts as revealed water
-      return;
-    }
+    if (isWater(g, sx + ox, sy + oy)) return; // already touches (now-always-visible) water
   }
   const carveable = (x: number, y: number) => {
     if (x < 1 || y < 1 || x >= GRID - 1 || y >= GRID - 1) return false;
@@ -434,15 +434,11 @@ export function ensureWaterNeighbor(g: Geo, spot: Coord, _kb: string): void {
     return sb - sa || a[0] - b[0] || a[1] - b[1];
   });
   const [wx, wy] = cands[0]!;
-  g.revealed.add(chKey(chunkOf(wx, wy).cx, chunkOf(wx, wy).cy));
   setWater(g, wx, wy);
   // extend one tile further for a small basin
   const ex = wx + Math.sign(wx - sx);
   const ey = wy + Math.sign(wy - sy);
-  if (carveable(ex, ey)) {
-    g.revealed.add(chKey(chunkOf(ex, ey).cx, chunkOf(ex, ey).cy));
-    setWater(g, ex, ey);
-  }
+  if (carveable(ex, ey)) setWater(g, ex, ey);
   addSandRim(g);
 }
 
@@ -466,43 +462,47 @@ export function placeLot(
   return { pos: want };
 }
 
-/** All water tiles inside currently-revealed chunks, sorted (model.biome.water). */
-export function revealedWater(g: Geo): Coord[] {
+/** Every water tile in the world, sorted (model.biome.water). Terrain is fully
+ * visible from day 0, so this is the whole seed-derived coastline/lakes/rivers
+ * plus any api inlets carved in-place. */
+export function allWater(g: Geo): Coord[] {
   const out: Coord[] = [];
   for (let y = 0; y < GRID; y++)
     for (let x = 0; x < GRID; x++)
-      if (g.ground[y]![x]!.t === "water" && isRevealed(g, x, y)) out.push([x, y]);
+      if (g.ground[y]![x]!.t === "water") out.push([x, y]);
   out.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   return out;
 }
 
-// ============================ expansion (fog recession) ============================
+// ============================ expansion (district surveying) ============================
 
 /**
- * Annex one fog chunk in the growth direction when built lots exceed 60% of the
- * revealed area. Returns the newly-revealed chunk (or null).
+ * "Survey" one un-surveyed chunk in the growth direction when built lots exceed
+ * the density trigger. Fog-of-war is gone — this no longer reveals terrain (it
+ * is all visible from day 0); it only marks a "district surveyed" moment the
+ * renderer/log shows. Returns the newly-surveyed chunk (or null).
  */
-export function maybeExpand(g: Geo, expandIdx: number): { cx: number; cy: number } | null {
-  // "built lots exceed 60% of revealed area": buildings are sparse, so use a
-  // lot-density proxy — expand when lots exceed 2.4 per revealed chunk.
-  if (g.lotsGeo.length <= g.revealed.size * 2.4) return null;
+export function maybeSurvey(g: Geo, surveyIdx: number): { cx: number; cy: number } | null {
+  // lot-density proxy — survey a new district when lots exceed 2.4 per
+  // already-surveyed chunk (same trigger the fog recession used).
+  if (g.lotsGeo.length <= g.surveyed.size * 2.4) return null;
 
   const cand: { cx: number; cy: number; score: number }[] = [];
-  for (const rk of g.revealed) {
+  for (const rk of g.surveyed) {
     const [cx, cy] = rk.split(",").map(Number) as [number, number];
     for (const [ox, oy] of NEIGHBORS) {
       const nx = cx + ox;
       const ny = cy + oy;
       if (nx < 0 || ny < 0 || nx >= GRIDCH || ny >= GRIDCH) continue;
-      if (g.revealed.has(chKey(nx, ny))) continue;
+      if (g.surveyed.has(chKey(nx, ny))) continue;
       const align = (nx - CENTER / CHUNK) * g.growthVec.x + (ny - CENTER / CHUNK) * g.growthVec.y;
-      cand.push({ cx: nx, cy: ny, score: align + rand(g.seed, `expand:${expandIdx}:${nx}:${ny}`) * 0.8 });
+      cand.push({ cx: nx, cy: ny, score: align + rand(g.seed, `survey:${surveyIdx}:${nx}:${ny}`) * 0.8 });
     }
   }
   if (!cand.length) return null;
   cand.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.cx - b.cx || a.cy - b.cy));
   const pick = cand[0]!;
-  g.revealed.add(chKey(pick.cx, pick.cy));
+  g.surveyed.add(chKey(pick.cx, pick.cy));
   return { cx: pick.cx, cy: pick.cy };
 }
 

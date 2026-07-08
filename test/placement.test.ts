@@ -134,14 +134,13 @@ describe("lot spacing & street invariants (game-rules §5)", () => {
       ground: [],
       occupied: new Set(),
       roadSet: new Set(),
-      revealed: new Set(),
+      surveyed: new Set(),
       lotsGeo: [],
     };
     for (let y = 0; y < 20; y++) {
       geo.ground[y] = [];
       for (let x = 0; x < 20; x++) geo.ground[y]![x] = { t: "grass", elev: 0 };
     }
-    for (let cx = 0; cx < 2; cx++) for (let cy = 0; cy < 2; cy++) geo.revealed.add(`${cx},${cy}`);
     const path: Coord[] = [[3, 5], [4, 5], [5, 5], [6, 5]];
     for (const [x, y] of path) {
       geo.ground[y]![x]!.t = "road";

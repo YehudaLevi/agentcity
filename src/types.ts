@@ -207,7 +207,7 @@ export interface SerializedState {
   baseline: Baseline;
   occupied: string[];
   roadSet: string[];
-  revealed: string[];
+  surveyed: string[]; // chunk keys growth has surveyed (fog-of-war removed)
   carvedWater: Coord[];
   warehouse: [string, number][];
   globalWU: number;

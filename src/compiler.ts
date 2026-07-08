@@ -46,12 +46,13 @@ import {
   setRoad,
   pathRoad,
   placeLot,
-  maybeExpand,
+  maybeSurvey,
   railPath,
-  revealedWater,
+  allWater,
   widenAvenue,
   CHUNK,
   GRID,
+  GRIDCH,
   CENTER,
 } from "./rules/placement.js";
 
@@ -151,18 +152,23 @@ function initState(seed: string, config: CityConfig): State {
     ground: [],
     occupied: new Set(),
     roadSet: new Set(),
-    revealed: new Set(),
+    surveyed: new Set(),
     lotsGeo: [],
   };
   genTerrain(geo);
-  // reveal center 2x2 chunks (chunks 2,3 -> tiles 20..39 in the 60x60 world)
+  // Fog-of-war removed (game-rules §5, amended 2026-07-09): generate the ENTIRE
+  // world's terrain from seed and mark EVERY chunk revealed on day 0 (geography
+  // before buildings). model.chunks keeps its Contract shape; the renderer still
+  // reads it, now finding all chunks revealed.
   const chunks: Chunk[] = [];
-  for (const cx of [2, 3]) {
-    for (const cy of [2, 3]) {
-      geo.revealed.add(`${cx},${cy}`);
+  for (let cx = 0; cx < GRIDCH; cx++) {
+    for (let cy = 0; cy < GRIDCH; cy++) {
       chunks.push({ x: cx, y: cy, revealed: true, revealedDay: 0 });
     }
   }
+  // The founding district (center 2x2 chunks, tiles 20..39) is "surveyed" at
+  // founding; further districts are surveyed as the city grows (maybeSurvey).
+  for (const cx of [2, 3]) for (const cy of [2, 3]) geo.surveyed.add(`${cx},${cy}`);
   // seed-chosen origin (NOT center)
   const q = Math.floor(rand(seed, "origin:q") * 4);
   const ox = CENTER + (q & 1 ? -1 : 1) * (3 + Math.floor(rand(seed, "origin:dx") * 4));
@@ -255,8 +261,13 @@ function buildBaseline(st: State): void {
     },
     baseline: st.baseline,
   });
-  // initial chunk reveals
-  for (const c of st.chunks) emit(st, "chunk.reveal", { x: c.x, y: c.y, revealedDay: c.revealedDay });
+  // chunk.reveal is no longer emitted for map-existence (all chunks are revealed
+  // in the model from day 0). It now marks a "district surveyed" moment: emit one
+  // per founding-district chunk on day 0; growth surveys further chunks later.
+  for (const k of [...st.geo.surveyed].sort()) {
+    const [cx, cy] = k.split(",").map(Number) as [number, number];
+    emit(st, "chunk.reveal", { x: cx, y: cy, revealedDay: 0, surveyed: true });
+  }
 }
 
 // ============================ day step ============================
@@ -325,8 +336,6 @@ function foundLot(st: State, a: Activity): void {
   const placed = placeLot(st.geo, category, placeIdx);
   if (!placed) return;
   const [x, y] = placed.pos;
-  // carving an api inlet may reveal fog chunks — reflect them into the model
-  syncRevealedChunks(st);
   const alias = `building-${placeIdx + 1}`;
   const lot: ILot = {
     id: `h(${a.repo})`,
@@ -382,19 +391,16 @@ function foundLot(st: State, a: Activity): void {
   st.shipCount++;
   emit(st, "ship.arrive", { cargo: "founding", repo: a.repo });
 
-  // expansion check
-  if (maybeExpand(st.geo, st.chunks.length)) syncRevealedChunks(st);
+  // growth may survey a new district
+  surveyStep(st);
 }
 
-/** Reflect any geo.revealed chunk not yet in the model as a chunk.reveal delta. */
-function syncRevealedChunks(st: State): void {
-  const known = new Set(st.chunks.map((c) => `${c.x},${c.y}`));
-  const pending = [...st.geo.revealed].filter((k) => !known.has(k)).sort();
-  for (const k of pending) {
-    const [cx, cy] = k.split(",").map(Number) as [number, number];
-    st.chunks.push({ x: cx, y: cy, revealed: true, revealedDay: st.day });
-    emit(st, "chunk.reveal", { x: cx, y: cy, revealedDay: st.day });
-  }
+/** If lot density has grown enough, survey one new district and log the moment.
+ * Emits chunk.reveal{surveyed:true}; terrain existence is NOT touched (all chunks
+ * are already revealed in the model). */
+function surveyStep(st: State): void {
+  const picked = maybeSurvey(st.geo, st.geo.surveyed.size);
+  if (picked) emit(st, "chunk.reveal", { x: picked.cx, y: picked.cy, revealedDay: st.day, surveyed: true });
 }
 
 function detectCoupling(st: State, acts: Activity[]): void {
@@ -482,7 +488,7 @@ function applyEconomy(st: State, acts: Activity[]): void {
         wuNextTier: tp.wuNextTier,
         lastActiveDay: st.day,
       });
-      if (maybeExpand(st.geo, st.chunks.length)) syncRevealedChunks(st);
+      surveyStep(st);
     }
     // road usage: busy corridors upgrade (repo worked alongside neighbors)
     if (lot.roadId && activeCount >= 2) {
@@ -634,7 +640,7 @@ function assembleModel(st: State): CityModel {
   const roads = st.iroads.map((r) => ({ id: r.id, path: r.path, tier: r.tier }));
   const chunks = st.chunks.slice().sort((a, b) => a.x - b.x || a.y - b.y);
   const landmarks = st.landmarks.slice();
-  const water = revealedWater(st.geo);
+  const water = allWater(st.geo);
 
   return {
     version: 1,
@@ -699,7 +705,7 @@ function emitSyncLots(st: State): void {
 
 /** Back-patch the baseline.init delta with final biome/foundedTs for renderer replay. */
 function patchBaselineDelta(st: State): void {
-  const water = revealedWater(st.geo);
+  const water = allWater(st.geo);
   for (const d of st.deltas) {
     if (d.kind === "baseline.init") {
       d.foundedTs = st.foundedTs;
@@ -727,7 +733,7 @@ function serializeState(st: State): Checkpoint["state"] {
     baseline: st.baseline,
     occupied: [...st.geo.occupied],
     roadSet: [...st.geo.roadSet],
-    revealed: [...st.geo.revealed],
+    surveyed: [...st.geo.surveyed],
     carvedWater: st.carvedWater,
     warehouse: [...st.warehouse.entries()],
     globalWU: st.globalWU,
@@ -768,7 +774,7 @@ function deserializeState(cp: Checkpoint, config: CityConfig): State {
     ground: [],
     occupied: new Set(s.occupied),
     roadSet: new Set(s.roadSet),
-    revealed: new Set(s.revealed),
+    surveyed: new Set(s.surveyed),
     lotsGeo: s.ilots.map((l) => ({ x: l.x, y: l.y, cat: l.category as Category })),
   };
   rebuildTerrain(geo, s.carvedWater);
@@ -829,7 +835,7 @@ function recordCarvedWater(st: State): void {
     ground: [],
     occupied: new Set(),
     roadSet: new Set(),
-    revealed: new Set(),
+    surveyed: new Set(),
     lotsGeo: [],
   };
   genTerrain(base);
