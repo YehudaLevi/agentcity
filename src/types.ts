@@ -141,7 +141,8 @@ export type DeltaKind =
   | "chunk.reveal"
   | "landmark.add"
   | "ship.arrive"
-  | "population.set";
+  | "population.set"
+  | "sync.lots";
 
 export interface CityDelta {
   day: number;

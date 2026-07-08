@@ -5,7 +5,9 @@ import { stableStringify } from "../src/types.js";
 import type { CityDelta, CityModel } from "../src/types.js";
 
 // A reducer mirroring the renderer's (web/fixture-city.js): replaying the delta
-// stream must arrive at the same map state as a direct fold.
+// stream must arrive at the FULL map state of a direct fold, including exact
+// per-lot wu/wuIntoTier/wuNextTier/lastActiveDay — the final sync.lots delta
+// closes the gap that WU accrual within a tier used to leave.
 function replay(deltas: CityDelta[]) {
   const lotById = new Map<string, any>();
   const roadById = new Map<string, any>();
@@ -32,14 +34,24 @@ function replay(deltas: CityDelta[]) {
           secondary: d.secondary,
           pos: d.pos,
           tier: d.tier,
+          wu: d.wu,
+          wuIntoTier: d.wuIntoTier,
+          wuNextTier: d.wuNextTier,
           decay: 0,
           foundedDay: d.foundedDay,
+          lastActiveDay: d.lastActiveDay,
           variant: d.variant,
         });
         break;
       case "lot.upgrade": {
         const l = lotById.get(d.id as string);
-        if (l) l.tier = d.tier;
+        if (l) {
+          l.tier = d.tier;
+          l.wu = d.wu;
+          l.wuIntoTier = d.wuIntoTier;
+          l.wuNextTier = d.wuNextTier;
+          l.lastActiveDay = d.lastActiveDay;
+        }
         break;
       }
       case "lot.decay": {
@@ -49,7 +61,10 @@ function replay(deltas: CityDelta[]) {
       }
       case "lot.renovate": {
         const l = lotById.get(d.id as string);
-        if (l) l.decay = 0;
+        if (l) {
+          l.decay = 0;
+          l.lastActiveDay = d.lastActiveDay;
+        }
         break;
       }
       case "road.add":
@@ -75,6 +90,18 @@ function replay(deltas: CityDelta[]) {
         if (d.streakDays != null) streakDays = d.streakDays as number;
         if (d.allNighterYesterday != null) allNighterYesterday = d.allNighterYesterday as boolean;
         break;
+      case "sync.lots":
+        for (const s of d.lots as any[]) {
+          const l = lotById.get(s.id as string);
+          if (l) {
+            l.wu = s.wu;
+            l.wuIntoTier = s.wuIntoTier;
+            l.wuNextTier = s.wuNextTier;
+            l.lastActiveDay = s.lastActiveDay;
+            l.decay = s.decay;
+          }
+        }
+        break;
       default:
         break;
     }
@@ -92,8 +119,12 @@ function lotProjection(m: CityModel) {
       secondary: l.secondary,
       pos: l.pos,
       tier: l.tier,
+      wu: l.wu,
+      wuIntoTier: l.wuIntoTier,
+      wuNextTier: l.wuNextTier,
       decay: l.decay,
       foundedDay: l.foundedDay,
+      lastActiveDay: l.lastActiveDay,
       variant: l.variant,
     }))
     .sort((a, b) => (a.id < b.id ? -1 : 1));
@@ -103,7 +134,7 @@ describe("deltas replay == model (map state)", () => {
   const { model, deltas } = fold(generateDemoEvents("replay-seed"), "replay-seed");
   const r = replay(deltas);
 
-  it("lots reconstruct identically (id/pos/tier/decay/category)", () => {
+  it("lots reconstruct identically (full deep equality incl. wu/progress/lastActiveDay)", () => {
     const replayed = [...r.lotById.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
     expect(stableStringify(replayed)).toBe(stableStringify(lotProjection(model)));
   });

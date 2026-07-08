@@ -300,6 +300,9 @@ function fold(list, upto){
         if(d.streakDays!=null) m.stats.streakDays=d.streakDays;
         if(d.allNighterYesterday!=null) m.stats.allNighterYesterday=d.allNighterYesterday;
         break;
+      case "sync.lots":
+        for(const s of d.lots){ const l=lotById[s.id]; if(l){ l.wu=s.wu; l.wuIntoTier=s.wuIntoTier; l.wuNextTier=s.wuNextTier; l.lastActiveDay=s.lastActiveDay; l.decay=s.decay; } }
+        break;
     }
   }
   let tot=0; for(const l of m.lots) tot+=l.wu; m.stats.totalWu=tot;
@@ -731,16 +734,22 @@ if(REDUCE){ ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListe
 if(SELFTEST){
   try{
     const res={ok:true, errors:[], checks:{}};
+    // Order-canonical city equality: a server/compiled model arrives with
+    // stable-sorted keys and lots/chunks in the compiler's canonical order,
+    // whereas fold() builds them in delta (founding/reveal) order. Compare on
+    // VALUES, not serialization order (mirrors test/deltas-replay.test.ts).
+    const CANON=(v)=>{ if(Array.isArray(v)) return v.map(CANON); if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v).sort())o[k]=CANON(v[k]);return o;} return v; };
+    const sameCity=(a,b)=>{ const n=(m)=>{ const c=CANON(m); c.lots=(c.lots||[]).slice().sort((x,y)=>x.id<y.id?-1:x.id>y.id?1:0); c.chunks=(c.chunks||[]).slice().sort((x,y)=>(x.x-y.x)||(x.y-y.y)); return JSON.stringify(c); }; return n(a)===n(b); };
     // 1) replay determinism: fold(deltas,MAX) deep-equals provided model
     const refold=fold(DELTAS,MAX_DAY);
-    res.checks.foldEqualsModel = JSON.stringify(refold)===JSON.stringify(MODEL);
+    res.checks.foldEqualsModel = sameCity(refold,MODEL);
     // 2) live render paints all lots
     setMode("live"); render(); res.checks.liveBuildings=lastBuildingCount; res.checks.modelLots=MODEL.lots.length;
     res.checks.livePaintsAll = lastBuildingCount===MODEL.lots.length;
     // 3) timelapse day 0 then day 90 => same building count + same stats as live
     setMode("timelapse"); setDay(0,false); render(); res.checks.day0Buildings=lastBuildingCount;
     setDay(MAX_DAY,false); render(); res.checks.day90Buildings=lastBuildingCount;
-    res.checks.timelapseEndMatchesLive = lastBuildingCount===MODEL.lots.length && JSON.stringify(M)===JSON.stringify(MODEL);
+    res.checks.timelapseEndMatchesLive = lastBuildingCount===MODEL.lots.length && sameCity(M,MODEL);
     // 4) reduced-motion path: animate off => still renders w/o throwing
     const savedAnim=animate; animate=false; render(); animate=savedAnim;
     res.checks.reducedMotionClean=true;

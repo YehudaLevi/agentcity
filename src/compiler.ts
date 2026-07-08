@@ -645,6 +645,32 @@ function assembleModel(st: State): CityModel {
   };
 }
 
+/**
+ * Emit exactly ONE sync.lots as the FINAL delta of a fold. Per-lot wu/progress/
+ * lastActiveDay/decay only change the model between lot.upgrade/lot.decay deltas
+ * (WU keeps accruing within a tier with no delta of its own), so delta replay
+ * would otherwise land on stale wu fields. This final overwrite makes replayed
+ * state deep-equal the model. Deterministic order: sorted by repo (matches
+ * assembleModel's lot order).
+ */
+function emitSyncLots(st: State): void {
+  const lots = st.ilots
+    .slice()
+    .sort((a, b) => (a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0))
+    .map((l) => {
+      const { wuIntoTier, wuNextTier } = tierProgress(l.wu, l.tier);
+      return {
+        id: l.id,
+        wu: l.wu,
+        wuIntoTier,
+        wuNextTier,
+        lastActiveDay: l.lastActiveDay,
+        decay: l.decay,
+      };
+    });
+  emit(st, "sync.lots", { lots });
+}
+
 /** Back-patch the baseline.init delta with final biome/foundedTs for renderer replay. */
 function patchBaselineDelta(st: State): void {
   const water = revealedWater(st.geo);
@@ -820,6 +846,9 @@ function finalize(st: State, events: PixelEvent[]): FoldResult {
   // renderer's delta-replay reconstructs model.biome. (Absent in incremental
   // folds, whose baseline.init lives in the earlier checkpoint's delta log.)
   patchBaselineDelta(st);
+  // final delta of every fold (full and incremental): overwrite exact per-lot
+  // wu/progress/lastActiveDay/decay so delta replay == model (byte-exact).
+  emitSyncLots(st);
   const model = assembleModel(st);
   const upToTs = events.length ? events[events.length - 1]!.ts : new Date(0).toISOString();
   const checkpoint: Checkpoint = {

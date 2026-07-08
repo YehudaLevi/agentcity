@@ -240,12 +240,26 @@
           if (d.streakDays != null) m.stats.streakDays = d.streakDays;
           if (d.allNighterYesterday != null) m.stats.allNighterYesterday = d.allNighterYesterday;
           break;
+        case "sync.lots":
+          for (var si = 0; si < d.lots.length; si++) { var s = d.lots[si], sl = lotById[s.id];
+            if (sl) { sl.wu = s.wu; sl.wuIntoTier = s.wuIntoTier; sl.wuNextTier = s.wuNextTier; sl.lastActiveDay = s.lastActiveDay; sl.decay = s.decay; } }
+          break;
       }
     }
     var tot = 0; for (var j = 0; j < m.lots.length; j++) tot += m.lots[j].wu;
     m.stats.totalWu = tot;
     return m;
   }
+
+  // contract: the FINAL delta of every fold is a sync.lots carrying exact
+  // per-lot wu/progress/lastActiveDay/decay (matches the compiler). Derived from
+  // a pre-fold so it re-asserts the already-consistent values -> fold == model.
+  var _pre = fold(deltas, MAX_DAY);
+  var _syncLots = _pre.lots
+    .slice()
+    .sort(function (a, b) { return a.repo < b.repo ? -1 : a.repo > b.repo ? 1 : 0; })
+    .map(function (l) { return { id: l.id, wu: l.wu, wuIntoTier: l.wuIntoTier, wuNextTier: l.wuNextTier, lastActiveDay: l.lastActiveDay, decay: l.decay }; });
+  deltas.push({ day: MAX_DAY, seq: 1000 + deltas.length, kind: "sync.lots", lots: _syncLots });
 
   var model = fold(deltas, MAX_DAY);
 
