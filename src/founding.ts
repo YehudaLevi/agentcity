@@ -169,6 +169,9 @@ export interface PollResult {
   model: CityModel;
   newDeltas: CityDelta[];
   checkpoint: Checkpoint;
+  /** Raw events this poll folded — the server turns these into SSE
+   * "activity" presence messages (birds/flicker); never map state. */
+  newEvents: PixelEvent[];
 }
 
 /**
@@ -189,7 +192,7 @@ export function poll(root: string, sources: Sources, opts: FoundOptions = {}): P
   // Push everything past the previous committed frontier to SSE clients: the
   // days that just finalized plus the live (still-open) day.
   const newDeltas = result.deltas.filter((d) => d.day > cp.state.day);
-  return { model: result.model, newDeltas, checkpoint: result.checkpoint };
+  return { model: result.model, newDeltas, checkpoint: result.checkpoint, newEvents };
 }
 
 // ============================ delta partitioning (open vs committed) ============================

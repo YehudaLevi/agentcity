@@ -46,6 +46,8 @@ export interface AgentcityServer {
    * founding timelapse sees them) and pushed to every open /events stream.
    */
   update(model: CityModel, newDeltas: CityDelta[]): void;
+  /** Broadcast atmosphere-only activity messages over the same SSE stream. */
+  pushActivity(msgs: Array<{ type: "activity"; repo: string; kind: string; tool?: string }>): void;
   /** Current served bundle (test hook). */
   getBundle(): CityBundle;
   /** Open SSE client count (test hook). */
@@ -158,6 +160,19 @@ export function createAgentcityServer(opts: AgentcityServerOptions): AgentcitySe
       }
       clients.clear();
       return new Promise<void>((resolve) => server.close(() => resolve()));
+    },
+    pushActivity(msgs: Array<{ type: "activity"; repo: string; kind: string; tool?: string }>) {
+      // Presence channel: lightweight, atmosphere-only messages (birds,
+      // window flicker). Same SSE stream as deltas; renderers that don't
+      // understand {type:"activity"} ignore it.
+      if (!msgs.length) return;
+      for (const res of clients) {
+        try {
+          for (const m of msgs) res.write(`data: ${JSON.stringify(m)}\n\n`);
+        } catch {
+          clients.delete(res);
+        }
+      }
     },
     update(model: CityModel, newDeltas: CityDelta[]) {
       bundle = { model, deltas: bundle.deltas.concat(newDeltas) };

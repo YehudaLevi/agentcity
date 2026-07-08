@@ -77,7 +77,18 @@ async function serve(args: Args): Promise<void> {
   const timer = setInterval(() => {
     try {
       const p = poll(root, sources);
-      if (p) server.update(p.model, p.newDeltas);
+      if (p) {
+        server.update(p.model, p.newDeltas);
+        // Presence: turn the freshly-folded raw events into activity
+        // messages (birds/flicker layer). Atmosphere only — never map state.
+        const PRESENCE = new Set(["tool.pre", "turn.end", "fork.start", "waiting.human", "waiting.permission", "session.start"]);
+        server.pushActivity(
+          p.newEvents
+            .filter((e) => PRESENCE.has(e.kind))
+            .slice(-60) // cap per poll: enough for ambience, never a flood
+            .map((e) => ({ type: "activity" as const, repo: e.repo, kind: e.kind, tool: e.tool })),
+        );
+      }
     } catch {
       /* a bad poll must never crash the server */
     }
