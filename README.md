@@ -7,27 +7,21 @@
 > work. Your agent designs the architecture. Neglect shows as decay.
 > Solo: your city. Team: the org's skyline on the office TV.
 
-## ⛔ Status: VALIDATION PHASE — no product code yet
+## Status: M0 SHIPPED — dogfood week (updated 2026-07-08)
 
-This project is gated behind the validation discipline learned the hard way
-(see `docs/plan.md` §1). Code starts only when all gates pass:
+All four validation gates passed (evidence in docs/sweep-*.md). M0 built,
+integrated, and running on the founder's real data: compiler (history +
+live events -> deterministic city), renderer (live view + founding
+timelapse), server + npx CLI, presence layer (birds/SSE). ~20 commits,
+64 engine tests. Two days of real-data dogfooding produced and fixed: day
+runaway, worktree phantoms, lot spacing/streets, construction staging,
+fidelity wave, UI drawers/log, full-reveal terrain, seed override.
 
-- [x] **Gate 1 — incumbent sweep**: PASSED 2026-07-07 with conditions.
-      Verdict: PARTIALLY OCCUPIED, our combo OPEN. Named neighbors: Git City
-      (5.7k*, GitHub-activity pixel city, monetized), pixel-agents (73k
-      installs, ephemeral), AgentPet, AI Town (one-off). Agent-authored
-      architecture: nobody. Conditions: positioning must name Git City;
-      re-verify neighbor changelogs before build. Full report: docs/sweep-2026-07-07.md
-- [x] **Gate 2 — the mock feels right**: PASSED 2026-07-07 ("go green" —
-      user, after mock v3, the living isometric city). Game rules drafted:
-      docs/game-rules.md.
-- [ ] **Gate 3 — metaphor check**: city vs garden decided on evidence
-      (scale + taxonomy legibility currently favor city; see plan §4).
-- [x] **Gate 4 — team-lane**: PASSED 2026-07-07 with conditions. Lane OPEN;
-      "waiting on human" as a team metric exists NOWHERE. Sharks named on
-      the serious end (claude-view, Devin Desktop, Anthropic native — real
-      platform risk); fun-first team surface untouched. Re-verify before M3.
-      Full report: docs/sweep-gate4-team-lane.md
+**Read next: [docs/gaps.md](docs/gaps.md)** — honest punch list + the
+`wip/rotation-fix` branch warning + operational lessons (STALE dist/!).
+
+Run: `npm run build && node bin/agentcity.js` (server :4243).
+Refound (recompiles city from archives): `node bin/agentcity.js refound --yes [--seed s]`.
 
 ## The one-paragraph pitch
 
