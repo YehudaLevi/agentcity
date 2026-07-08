@@ -167,6 +167,24 @@ All derivable from existing events:
 - Potholes = accumulated tool failures on that repo; repaved by successes.
 - Rush hour = real work-hour distribution mirrored in traffic density.
 
+## 4h. Map init & persistence (2026-07-08)
+
+**Init (never empty):** baseline hamlet always — seeded starter (1 house +
+dirt-road bend + 1-2 biome props). With history: t=0 shows hamlet + up to
+~4 history buildings at reduced tier (the teaser); Founding Timelapse
+(60-90s, skippable → jump to full history city, Tier-4 cap) delivers the
+rest. Config knob `history_influence: full|capped` (default full).
+
+**Storage (all local, nothing outbound):**
+- Live events: ~/.pixelagents/events.jsonl (existing emitter).
+- History source: ~/.claude/projects/**/*.jsonl (read once at founding).
+- Save game: ~/.agentcity/ — checkpoint.json (CityModel at day N,
+  content-hashed) + events-since-checkpoint + archive/events-YYYY-MM.jsonl.gz
+  (monthly) + album/*.png (cards).
+- INTEGRATION FIX REQUIRED: pixelagents prunes events >7 days — agentcity
+  must archive instead of prune (or hook the rotation). city = f(events,
+  seed) stays fully re-derivable from archives. Backup = copy one dir.
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
