@@ -77,9 +77,13 @@ Events convert to WU (the only way anything gets built):
   organic street patterns.
 - Rails: laid between two lots when their repos co-occur in sessions
   (coupling made visible).
-- **Expansion**: when built lots exceed 60% of revealed area, one fog chunk
-  is annexed in the current growth direction (weighted random, seed-fed).
-  Survey stakes appear in fog a chunk ahead (foreshadowing).
+- **Expansion (amended 2026-07-09, user decision)**: the FULL terrain is
+  generated and visible from day 0 — geography before buildings (fog-of-war
+  removed; it hid the biome and rendered as void). Terrain = f(seed) only,
+  permanent per user (seed pinned at founding). "Wild vs settled": unbuilt
+  land renders desaturated with wild details; approaching city tames tiles.
+  Former chunk-reveals become "district surveyed" log moments; survey stakes
+  still foreshadow growth direction.
 
 ### 5b. Spacing & streets (amended 2026-07-08, dogfood feedback)
 
