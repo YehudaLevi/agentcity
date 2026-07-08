@@ -27,61 +27,88 @@
     padding:8px 10px; line-height:1.45; letter-spacing:.4px;
   }
   .hud{position:absolute;z-index:5;font-size:12px;}
-  #hudTL{top:12px;left:12px;max-width:250px;}
-  #hudTL .big{font-size:15px;color:var(--gold);font-weight:bold;letter-spacing:2px;}
-  #hudTL .sub{color:var(--ink-dim);font-size:10px;margin-top:2px;}
   #livedot{font-size:9px;color:#4a4a52;vertical-align:middle;transition:color .3s;}
   #livedot.on{color:var(--green);text-shadow:0 0 5px var(--green);}
-  #hudTL .sub b{color:var(--cyan);font-weight:normal;}
 
-  /* control bar */
-  #ctrl{top:12px;left:50%;transform:translateX(-50%);z-index:7;font-size:11px;
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;max-width:94vw;}
-  #ctrl button, #ctrl .seg{font-family:inherit;font-size:11px;color:var(--ink);
-    background:var(--panel2);border:2px solid var(--line);cursor:pointer;
-    padding:4px 8px;line-height:1;letter-spacing:.5px;}
-  #ctrl button:hover, #ctrl .seg:hover{background:#2c2c4e;color:var(--gold);}
-  #ctrl .seg.on{background:#2c2c4e;color:var(--cyan);border-color:var(--cyan);}
-  #ctrl .grp{display:flex;gap:0;}
-  #ctrl .grp .seg{border-right-width:0;}
-  #ctrl .grp .seg:last-child{border-right-width:2px;}
-  #ctrl .lbl{color:var(--ink-dim);font-size:10px;letter-spacing:1px;}
-  #ctrl input[type=range]{vertical-align:middle;}
-  #tod{width:90px;} #scrub{width:150px;}
-  #wx{color:var(--cyan);font-size:11px;letter-spacing:.5px;}
-  #ctrl .sep{width:2px;height:20px;background:var(--line);margin:0 2px;}
-  .tl-only{display:none;}
-  body.mode-timelapse .tl-only{display:inline-flex;}
-  body.mode-timelapse .tl-only.blk{display:flex;}
+  /* ---- slim top bar ---- */
+  #topbar{position:fixed;top:0;left:0;right:0;height:46px;z-index:20;
+    display:flex;align-items:center;gap:9px;padding:0 10px;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border-bottom:2px solid var(--line);box-shadow:0 2px 0 rgba(0,0,0,.35);font-size:12px;}
+  #topbar .wm{font-size:14px;color:var(--gold);font-weight:bold;letter-spacing:2px;white-space:nowrap;}
+  #topbar .day{color:var(--gold);letter-spacing:1px;white-space:nowrap;}
+  #topbar .date{color:var(--ink-dim);font-size:10px;white-space:nowrap;}
+  #topbar .spacer{flex:1;}
+  #topbar .seg{font-family:inherit;font-size:11px;color:var(--ink);
+    background:var(--panel2);border:2px solid var(--line);cursor:pointer;padding:6px 8px;line-height:1;letter-spacing:.5px;}
+  #topbar .seg:hover{background:#2c2c4e;color:var(--gold);}
+  #topbar .seg.on{background:#2c2c4e;color:var(--cyan);border-color:var(--cyan);}
+  #topbar .grp{display:flex;}
+  #topbar .grp .seg{border-right-width:0;}
+  #topbar .grp .seg:last-child{border-right-width:2px;}
+  #topbar .ico{width:32px;height:30px;font-size:14px;display:inline-flex;align-items:center;justify-content:center;padding:0;}
+  @media (max-width:820px){ #topbar .date,#topbar #wx{display:none;} }
+  @media (max-width:640px){ #topbar #modes .seg{font-size:0;padding:6px 5px;} #topbar #modes .seg::first-letter{font-size:11px;} }
 
-  /* day / WU meter */
-  #hudDay{top:64px;left:12px;z-index:5;font-size:11px;min-width:160px;}
-  #hudDay .day{font-size:14px;color:var(--gold);font-weight:bold;letter-spacing:1px;}
-  #hudDay .date{color:var(--ink-dim);font-size:10px;}
-  #hudDay .meter{margin-top:6px;height:8px;background:#0c0b18;border:1px solid var(--line);position:relative;}
-  #hudDay .meter i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--cyan),var(--gold));width:0%;}
-  #hudDay .mlbl{color:var(--ink-dim);font-size:9px;margin-top:3px;letter-spacing:.5px;}
-
-  #sound{position:absolute;left:12px;top:150px;z-index:6;font-size:11px;letter-spacing:.5px;
-    color:var(--ink-dim);cursor:pointer;}
-  #sound:hover{color:var(--gold);}
-  #sound.on{color:var(--cyan);}
-  #sound .ico{margin-right:4px;filter:grayscale(1) brightness(1.2);}
-  #sound.on .ico{filter:none;}
-
-  /* right rail: stats */
-  #rail{position:absolute;right:12px;top:12px;z-index:5;width:210px;font-size:11px;
-    display:flex;flex-direction:column;gap:8px;}
-  #rail h4{font-size:9px;color:var(--ink-dim);letter-spacing:1.5px;margin-bottom:5px;font-weight:normal;}
-  #stats{display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;}
-  #stats .s{display:flex;justify-content:space-between;}
+  /* ---- side drawers ---- */
+  .drawer{position:fixed;top:46px;bottom:0;z-index:15;width:280px;max-width:86vw;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));border:2px solid var(--line);
+    overflow-y:auto;overflow-x:hidden;transition:transform .25s ease;padding:12px 14px;font-size:12px;}
+  #drawer{left:0;border-top:none;border-left:none;transform:translateX(-103%);box-shadow:4px 0 14px rgba(0,0,0,.45);}
+  #drawer.open{transform:translateX(0);}
+  #logDrawer{right:0;border-top:none;border-right:none;transform:translateX(103%);box-shadow:-4px 0 14px rgba(0,0,0,.45);}
+  #logDrawer.open{transform:translateX(0);}
+  .drawer h4{font-size:9px;color:var(--ink-dim);letter-spacing:1.5px;margin:16px 0 8px;font-weight:normal;
+    border-bottom:1px solid var(--line);padding-bottom:5px;}
+  .drawer h4:first-child{margin-top:0;}
+  #stats{display:grid;grid-template-columns:1fr 1fr;gap:6px 12px;}
+  #stats .s{display:flex;justify-content:space-between;gap:6px;}
   #stats .s b{color:var(--gold);font-weight:normal;}
   #stats .s span{color:var(--ink-dim);font-size:10px;}
-
-  #legend{position:absolute;left:12px;bottom:64px;z-index:5;font-size:10px;}
-  #legend h4{font-size:10px;color:var(--ink-dim);letter-spacing:1px;margin-bottom:6px;font-weight:normal;}
-  #legend .li{display:flex;align-items:center;gap:7px;margin:3px 0;}
+  #wuWrap{margin-top:10px;}
+  #wuWrap .meter{height:8px;background:#0c0b18;border:1px solid var(--line);position:relative;}
+  #wuWrap .meter i{position:absolute;left:0;top:0;bottom:0;background:linear-gradient(90deg,var(--cyan),var(--gold));width:0%;}
+  #wuWrap .mlbl{color:var(--ink-dim);font-size:9px;margin-top:3px;letter-spacing:.5px;}
+  #legend .li{display:flex;align-items:center;gap:7px;margin:4px 0;font-size:11px;}
   #legend .chip{width:11px;height:11px;border:1px solid rgba(0,0,0,.5);flex:none;}
+  .setting{margin:10px 0;display:flex;flex-direction:column;gap:6px;}
+  .setting .lbl{color:var(--ink-dim);font-size:10px;letter-spacing:.8px;}
+  .setting .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .segrow{display:flex;flex-wrap:wrap;gap:4px;}
+  .segrow .seg{font-family:inherit;font-size:10px;color:var(--ink);background:var(--panel2);
+    border:2px solid var(--line);cursor:pointer;padding:5px 8px;line-height:1;letter-spacing:.4px;}
+  .segrow .seg:hover{background:#2c2c4e;color:var(--gold);}
+  .segrow .seg.on{background:#2c2c4e;color:var(--cyan);border-color:var(--cyan);}
+  #tod{flex:1;min-width:120px;}
+  .tl-only{display:none;}
+  body.mode-timelapse .tl-only{display:flex;}
+
+  /* ---- information log (right drawer) ---- */
+  #logFilter{width:100%;font-family:inherit;font-size:11px;color:var(--ink);background:#0c0b18;
+    border:2px solid var(--line);padding:6px 8px;margin-bottom:9px;letter-spacing:.5px;}
+  #logFilter:focus{outline:none;border-color:var(--cyan);}
+  #logFeed{display:flex;flex-direction:column;}
+  .logrow{padding:5px 2px;border-bottom:1px solid rgba(58,56,86,.5);line-height:1.35;}
+  .logrow .when{color:var(--cyan);font-size:9px;letter-spacing:.5px;}
+  .logrow .what{color:var(--ink);font-size:11px;}
+  .logrow.live .when{color:var(--green);}
+  .logrow.milestone .what{color:var(--gold);}
+  #logEmpty{color:var(--ink-dim);font-size:10px;font-style:italic;padding:8px 2px;}
+
+  /* ---- timelapse transport (bottom-center, timelapse only) ---- */
+  #transport{left:50%;bottom:16px;transform:translateX(-50%);z-index:12;
+    display:none;align-items:center;gap:8px;font-size:11px;padding:8px 12px;max-width:94vw;flex-wrap:wrap;justify-content:center;}
+  body.mode-timelapse #transport{display:flex;}
+  #transport button,#transport .seg{font-family:inherit;font-size:11px;color:var(--ink);background:var(--panel2);
+    border:2px solid var(--line);cursor:pointer;padding:5px 9px;line-height:1;letter-spacing:.5px;}
+  #transport button:hover,#transport .seg:hover{background:#2c2c4e;color:var(--gold);}
+  #transport .seg.on{background:#2c2c4e;color:var(--cyan);border-color:var(--cyan);}
+  #transport .grp{display:flex;}
+  #transport .grp .seg{border-right-width:0;}
+  #transport .grp .seg:last-child{border-right-width:2px;}
+  #scrub{width:220px;max-width:44vw;}
+  #tlday{color:var(--gold);min-width:82px;text-align:center;letter-spacing:.5px;}
+  #wx{color:var(--cyan);font-size:11px;letter-spacing:.5px;white-space:nowrap;}
 
   /* zoom */
   #zoom{position:absolute;right:12px;bottom:214px;z-index:5;display:flex;flex-direction:column;gap:4px;}
@@ -121,77 +148,105 @@
 <div id="stage">
   <canvas id="world"></canvas>
 
-  <div id="hudTL" class="hud panel">
-    <div class="big">AGENTCITY <span id="livedot" title="live feed">&#9679;</span></div>
-    <div class="sub" id="cityLine">loading…</div>
+  <div id="topbar">
+    <span class="wm">AGENTCITY <span id="livedot" title="live feed">&#9679;</span></span>
+    <div class="grp" id="modes" title="switch view">
+      <div class="seg on" data-m="live">&#9673; live</div>
+      <div class="seg" data-m="timelapse">&#9654; timelapse</div>
+    </div>
+    <span class="day" id="dayNum">day 0</span>
+    <span class="date" id="dayDate">&mdash;</span>
+    <span id="wx" class="date">&#9728; clear</span>
+    <span class="spacer"></span>
+    <button class="seg ico" id="sound" title="toggle ambient sound">&#128264;</button>
+    <div class="grp" id="rotate" title="rotate the map (r)">
+      <div class="seg ico" id="rotL">&#8635;</div>
+      <div class="seg ico" id="rotR">&#8634;</div>
+    </div>
+    <button class="seg ico" id="fsBtn" title="fullscreen">&#9974;</button>
+    <button class="seg ico" id="logBtn" title="information log">&#128220;</button>
+    <button class="seg ico" id="menuBtn" title="menu &amp; settings">&#9776;</button>
   </div>
 
-  <div id="ctrl" class="hud panel">
-    <div class="grp" id="modes">
-      <div class="seg on" data-m="live">&#9673; live view</div>
-      <div class="seg" data-m="timelapse">&#9654; founding timelapse</div>
+  <!-- LEFT DRAWER: stats · legend · settings -->
+  <div id="drawer" class="drawer">
+    <h4>CITY STATS</h4>
+    <div id="stats">
+      <div class="s"><span>global WU</span><b id="stWU">0</b></div>
+      <div class="s"><span>repos</span><b id="stRepo">0</b></div>
+      <div class="s"><span>population</span><b id="stPop">0</b></div>
+      <div class="s"><span>pets</span><b id="stPet">0</b></div>
+      <div class="s"><span>ships</span><b id="stShip">0</b></div>
+      <div class="s"><span>streak</span><b id="stStreak">0</b></div>
+      <div class="s"><span>chunks</span><b id="stChunk">0</b></div>
+      <div class="s"><span>seed</span><b id="stSeed">&mdash;</b></div>
     </div>
-    <div class="sep tl-only"></div>
-    <button id="play" class="tl-only">&#9654; play</button>
-    <div class="grp tl-only" id="speeds">
+    <div id="wuWrap">
+      <div class="meter"><i id="wuBar"></i></div>
+      <div class="mlbl" id="wuLbl">0 WU</div>
+    </div>
+
+    <h4>DISTRICTS &rarr; WORK</h4>
+    <div id="legend">
+      <div class="li"><span class="chip" style="background:#c96f4c"></span>code &middot; residential</div>
+      <div class="li"><span class="chip" style="background:#4aa6d8"></span>tests &middot; glass</div>
+      <div class="li"><span class="chip" style="background:#9a4a34"></span>infra &middot; industry</div>
+      <div class="li"><span class="chip" style="background:#a9723e"></span>api &middot; harbor</div>
+      <div class="li"><span class="chip" style="background:#c3b48c"></span>research &middot; library</div>
+      <div class="li"><span class="chip" style="background:#5f6bc6"></span>web &middot; observatory</div>
+      <div class="li"><span class="chip" style="background:#cfc7ac"></span>planning &middot; civic</div>
+    </div>
+
+    <h4>SETTINGS</h4>
+    <div class="setting">
+      <span class="lbl">MAP LABELS</span>
+      <div class="segrow"><div class="seg on" id="alias" title="swap repo names / aliases">repo names: ON</div></div>
+    </div>
+    <div class="setting">
+      <span class="lbl">SOUND</span>
+      <div class="segrow"><div class="seg" id="soundToggle">ambient: off</div></div>
+    </div>
+    <div class="setting">
+      <span class="lbl">BRIGHTNESS</span>
+      <div class="segrow" id="bright">
+        <div class="seg on" data-b="auto">auto</div>
+        <div class="seg" data-b="day">always day</div>
+        <div class="seg" data-b="dusk">always dusk</div>
+        <div class="seg" data-b="brightnight">bright night</div>
+      </div>
+    </div>
+    <div class="setting">
+      <span class="lbl">TIME OF DAY OVERRIDE</span>
+      <div class="row"><div class="seg on" id="auto">AUTO</div><input id="tod" type="range" min="0" max="1439" value="720"></div>
+    </div>
+    <div class="setting tl-only">
+      <span class="lbl">TIMELAPSE SPEED</span>
+      <div class="segrow"><div class="seg" style="cursor:default;border-color:transparent;background:none;color:var(--ink-dim)">use the transport bar &darr;</div></div>
+    </div>
+  </div>
+
+  <!-- RIGHT DRAWER: information log -->
+  <div id="logDrawer" class="drawer">
+    <h4>INFORMATION LOG</h4>
+    <input id="logFilter" type="text" placeholder="filter events…" autocomplete="off">
+    <div id="logFeed"><div id="logEmpty">no events yet</div></div>
+  </div>
+
+  <!-- TIMELAPSE TRANSPORT (bottom-center, timelapse only) -->
+  <div id="transport" class="hud panel">
+    <button id="play">&#9654; play</button>
+    <div class="grp" id="speeds">
       <div class="seg" data-s="1">1&times;</div>
       <div class="seg on" data-s="10">10&times;</div>
       <div class="seg" data-s="50">50&times;</div>
     </div>
-    <input id="scrub" class="tl-only" type="range" min="0" max="90" value="0">
-    <div class="sep"></div>
-    <div class="seg" id="alias" title="swap between repo names and aliases">repo names: ON</div>
-    <div class="sep"></div>
-    <div class="grp" id="rotate" title="rotate the map (r)">
-      <div class="seg" id="rotL">&#8635;</div>
-      <div class="seg" id="rotR">&#8634;</div>
-    </div>
-    <div class="sep"></div>
-    <span class="lbl">TIME</span>
-    <div class="seg on" id="auto">AUTO</div>
-    <input id="tod" type="range" min="0" max="1439" value="720">
-    <div class="sep"></div>
-    <span id="wx">&#9728; clear</span>
-  </div>
-
-  <div id="hudDay" class="hud panel">
-    <div class="day" id="dayNum">day 0</div>
-    <div class="date" id="dayDate">&mdash;</div>
-    <div class="meter"><i id="wuBar"></i></div>
-    <div class="mlbl" id="wuLbl">0 WU</div>
-  </div>
-
-  <div id="sound" class="hud panel" title="toggle ambient sound"><span class="ico">&#128264;</span><span class="txt">sound: off</span></div>
-
-  <div id="rail">
-    <div class="panel">
-      <h4>CITY STATS</h4>
-      <div id="stats">
-        <div class="s"><span>global WU</span><b id="stWU">0</b></div>
-        <div class="s"><span>population</span><b id="stPop">0</b></div>
-        <div class="s"><span>repos</span><b id="stRepo">0</b></div>
-        <div class="s"><span>pets</span><b id="stPet">0</b></div>
-        <div class="s"><span>chunks</span><b id="stChunk">0</b></div>
-        <div class="s"><span>ships</span><b id="stShip">0</b></div>
-        <div class="s"><span>streak</span><b id="stStreak">0</b></div>
-        <div class="s"><span>seed</span><b id="stSeed">&mdash;</b></div>
-      </div>
-    </div>
-  </div>
-
-  <div id="legend" class="hud panel">
-    <h4>DISTRICTS &rarr; WORK</h4>
-    <div class="li"><span class="chip" style="background:#c96f4c"></span>code &middot; residential</div>
-    <div class="li"><span class="chip" style="background:#4aa6d8"></span>tests &middot; glass</div>
-    <div class="li"><span class="chip" style="background:#9a4a34"></span>infra &middot; industry</div>
-    <div class="li"><span class="chip" style="background:#a9723e"></span>api &middot; harbor</div>
-    <div class="li"><span class="chip" style="background:#c3b48c"></span>research &middot; library</div>
-    <div class="li"><span class="chip" style="background:#5f6bc6"></span>web &middot; observatory</div>
-    <div class="li"><span class="chip" style="background:#cfc7ac"></span>planning &middot; civic</div>
+    <span id="tlday">day 0 / 90</span>
+    <input id="scrub" type="range" min="0" max="90" value="0">
   </div>
 
   <div id="zoom">
     <button id="zin" title="zoom in">+</button>
+    <button id="fit" title="fit city to view">&#8962;</button>
     <button id="zout" title="zoom out">&minus;</button>
   </div>
 
@@ -356,7 +411,9 @@ function buildWorld(m, isTimelapse){
   const hills=m.biome&&m.biome.kind==="hills";
   for(let y=0;y<GRID;y++){w.ground[y]=[];for(let x=0;x<GRID;x++){
     const hh=hashStr(SEED+"g"+x+"_"+y); let elev=0;
-    if(hills){ const n=(hashStr(SEED+"h"+((x/4)|0)+"_"+((y/4)|0))%1000)/1000; if(n>0.6) elev=Math.round((n-0.6)*24); }
+    // hills: gentle, coarse elevation. Kept subtle (small magnitude, high threshold)
+    // so cliff bands never streak across the map; gated to revealed tiles below.
+    if(hills){ const n=(hashStr(SEED+"h"+((x/5)|0)+"_"+((y/5)|0))%1000)/1000; if(n>0.74) elev=Math.round((n-0.74)*14); }
     w.ground[y][x]={t:((x+y)&1)?"grass":"grass2",elev, v:(hh%1000)/1000}; }}
   // water
   if(m.biome&&m.biome.water) for(const [x,y] of m.biome.water) if(inGrid(x,y)){ w.ground[y][x].t="water"; w.ground[y][x].elev=0; }
@@ -368,6 +425,8 @@ function buildWorld(m, isTimelapse){
   for(const c of m.chunks){ const k=c.x+","+c.y; w.revealed.add(k); w.revealDay[k]=c.revealedDay;
     if(!seenChunks.has(k)){ seenChunks.add(k); chunkRevealAnim[k]=(isTimelapse&&animate)? now : 0; } }
   const chunkRevealed=(x,y)=> w.revealed.has(((x/CHUNK)|0)+","+((y/CHUNK)|0));
+  // elevation only exists on revealed ground — fog stays flat (never carve cliffs into unrevealed map)
+  if(hills) for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ if(w.ground[y][x].elev>0 && !chunkRevealed(x,y)) w.ground[y][x].elev=0; }
   // roads (paint every tile along the waypoint polyline)
   function setRoad(x,y,tier,type){ if(!inGrid(x,y)||!chunkRevealed(x,y)) return; const c=w.ground[y][x]; if(c.t==="water") return;
     if(c.t!=="stone") c.t=type||"road"; const k=x+","+y; w.roadTierAt[k]=Math.max(w.roadTierAt[k]||0,tier);
@@ -490,11 +549,23 @@ let fireworksT=6000;
 
 // ============================ DAY/NIGHT (real local clock, override slider) ============================
 function currentMinutes(){ if(todAuto){ const d=new Date(); return d.getHours()*60+d.getMinutes(); } return todMinutes; }
-function lighting(){ const m=currentMinutes(), h=m/60; let light;
-  if(h<5||h>=21) light=0.05; else if(h<7) light=0.05+(h-5)/2*0.9; else if(h<18) light=0.95+0.05*Math.sin((h-6)/12*Math.PI); else if(h<20) light=0.95-(h-18)/2*0.9; else light=0.05;
-  light=Math.max(0.05,Math.min(1,light));
+// brightness setting (item 4): auto=real clock (rebalanced, readable floor) ·
+// day=noon · dusk=golden hour · brightnight=night shapes with +25% ambient.
+let brightMode="auto";
+const NIGHT_FLOOR=0.30;   // ambient never bottoms out to black anymore
+function lighting(){
+  if(brightMode==="day")        return {light:1.0, warm:0.06, h:13, night:0};
+  if(brightMode==="dusk")       return {light:0.60, warm:0.92, h:18.4, night:0};
+  if(brightMode==="brightnight")return {light:0.44, warm:0.12, h:1, night:1};  // night look, raised ambient
+  const m=currentMinutes(), h=m/60; let light;
+  if(h<5||h>=21) light=NIGHT_FLOOR;
+  else if(h<7)   light=NIGHT_FLOOR+(h-5)/2*(0.95-NIGHT_FLOOR);
+  else if(h<18)  light=0.95+0.05*Math.sin((h-6)/12*Math.PI);
+  else if(h<20)  light=0.95-(h-18)/2*(0.95-NIGHT_FLOOR);
+  else           light=NIGHT_FLOOR;
+  light=Math.max(NIGHT_FLOOR,Math.min(1,light));
   let warm=0; if(h>=5&&h<8) warm=1-Math.abs(h-6.5)/1.5; else if(h>=17&&h<20) warm=1-Math.abs(h-18.5)/1.5; warm=Math.max(0,warm);
-  return {light,warm,h}; }
+  return {light,warm,h,night:light<0.5?1:0}; }
 
 // ============================ WEATHER (seeded by date + biome) ============================
 function seasonWeights(month){ if(month>=11||month<=1) return {clear:0.42,rain:0.12,fog:0.18,snow:0.28}; if(month<=4) return {clear:0.5,rain:0.28,fog:0.14,snow:0.08}; if(month<=7) return {clear:0.72,rain:0.18,fog:0.08,snow:0.0}; return {clear:0.55,rain:0.22,fog:0.2,snow:0.03}; }
@@ -641,6 +712,8 @@ function paintBox(g,o,C,s,night){
   poly(g,[Cc.gL,Cc.gB,Cc.tB,Cc.tL],leftC,"rgba(0,0,0,.38)");
   poly(g,[Cc.gB,Cc.gR,Cc.tR,Cc.tB],rightC,"rgba(0,0,0,.28)");
   poly(g,[Cc.tT,Cc.tR,Cc.tB,Cc.tL],topC,"rgba(0,0,0,.22)");
+  if(night){ g.strokeStyle="rgba(198,212,255,.22)"; g.lineWidth=Math.max(1,s*0.5);   // gentle moonlight rim along the top ridge
+    g.beginPath(); g.moveTo(Cc.tL.x,Cc.tL.y); g.lineTo(Cc.tT.x,Cc.tT.y); g.lineTo(Cc.tR.x,Cc.tR.y); g.stroke(); }
   const cx=(Cc.tT.x+Cc.tB.x)/2, cy=(Cc.tT.y+Cc.tB.y)/2;
 
   // material texture on the two visible faces
@@ -650,7 +723,7 @@ function paintBox(g,o,C,s,night){
 
   // windows
   const litOn=night>0.4;
-  const litCol=o.decay?"#3a3020":(glass?"#bff0f4":info.trim);
+  const litCol=o.decay?"#3a3020":(glass?"#cfeff4":(night?"#ffdf9a":info.trim));   // warm golden window glow at night
   const offCol=glass?shade(base,0.82):shade(base,0.42*dim);
   const cols=glass?Math.max(3,tier+2):Math.max(2,tier);
   const rows=Math.max(2,Math.floor((TIER_H[tier]*st.hf)/(glass?9:12)));
@@ -712,9 +785,10 @@ function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
   const T=gridIso(x,y),R=gridIso(x+1,y),B=gridIso(x+1,y+1),L=gridIso(x,y+1); const top=[T,R,B,L].map(p=>projWorld(p.x,p.y-e));
   if(!chunkRevealed(x,y)){ poly(ctx,top,"#12131f"); poly(ctx,top,"rgba(4,4,12,.4)"); return; }
   const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2;
-  if(e>0){ const Lg=projWorld(L.x,L.y),Bg=projWorld(B.x,B.y),Rg=projWorld(R.x,R.y);
-    poly(ctx,[top[3],top[2],Bg,Lg],shade("#6a5236",Math.max(0.5,1-e*0.015)));
-    poly(ctx,[top[2],top[1],Rg,Bg],shade("#4a3826",Math.max(0.45,1-e*0.015))); }
+  if(e>0){ const Lg=projWorld(L.x,L.y),Bg=projWorld(B.x,B.y),Rg=projWorld(R.x,R.y); const f=Math.max(0.5,1-e*0.05);
+    // draw a cliff face only where it borders REVEALED ground — never into fog
+    if(chunkRevealed(x,y+1)) poly(ctx,[top[3],top[2],Bg,Lg],shade("#544230",f));
+    if(chunkRevealed(x+1,y)) poly(ctx,[top[2],top[1],Rg,Bg],shade("#3c2e20",f)); }
   const isRoad=(c.t==="road"), isStone=(c.t==="stone");
   let color=col[c.t]||"#333";
   if(c.t==="grass"||c.t==="grass2"){ const lift=e>0?1+Math.min(0.28,e*0.02):1; color=shade(mix(col[c.t], c.v>0.5?col.grass:col.grass2,0.25),(0.9+c.v*0.22)*lift); }
@@ -793,9 +867,19 @@ function drawPresence(){ if(REDUCE) return; let budget=10;
     const mx=fromx+(sc.x-fromx)*p, my=fromy+(sc.y-fromy)*p; ctx.globalAlpha=1-p*p;
     ctx.fillStyle="#d8b24a"; ctx.fillRect(mx-1*zoom,my-3*zoom,2*zoom,3*zoom); ctx.fillStyle="#2a2620"; ctx.fillRect(mx-1*zoom,my-4.4*zoom,2*zoom,1.5*zoom); ctx.globalAlpha=1; } }
 
-function skyBg(L){ const g=ctx.createLinearGradient(0,0,0,H); const night={t:"#0b1030",m:"#1a1838",b:"#241a38"}, day={t:"#4f86b8",m:"#7fb0cf",b:"#bfe0e8"}; const t=L.light;
+function skyBg(L){ const g=ctx.createLinearGradient(0,0,0,H);
+  // night sky is a lifted indigo→violet gradient (never a flat void), with stars + moon
+  const night={t:"#161a44",m:"#241f4c",b:"#2e2448"}, day={t:"#4f86b8",m:"#7fb0cf",b:"#bfe0e8"}; const t=L.light;
   g.addColorStop(0,mix(night.t,day.t,t)); g.addColorStop(0.55,mix(night.m,day.m,t)); g.addColorStop(1,mix(mix(night.b,day.b,t),"#d98a5a",L.warm*0.6)); ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
-  if(L.light<0.5){ ctx.fillStyle="rgba(255,255,255,"+(0.5*(1-L.light*2>0?1-L.light*2:0)+0.15)+")"; for(let i=0;i<50;i++) ctx.fillRect((i*97%W),(i*53%(H*0.4)),1,1); } }
+  if(L.light<0.5){ const dk=Math.min(1,(0.5-L.light)*2);   // 0 at dusk → 1 deep night
+    // stars (brighter, twinkling)
+    for(let i=0;i<64;i++){ const a=(0.35+0.4*dk)*(0.6+0.4*Math.abs(Math.sin((animate?now*0.001:0)+i*1.7))); ctx.fillStyle="rgba(240,244,255,"+a.toFixed(3)+")"; const sz=(i%9===0)?2:1; ctx.fillRect((i*97%W),(i*53%(H*0.55)),sz,sz); }
+    // soft moon, upper-right
+    const mx=W*0.83, my=H*0.15, mr=Math.max(14,Math.min(W,H)*0.045);
+    const halo=ctx.createRadialGradient(mx,my,mr*0.4,mx,my,mr*2.6); halo.addColorStop(0,"rgba(238,240,220,"+(0.5*dk).toFixed(3)+")"); halo.addColorStop(0.45,"rgba(210,220,210,"+(0.22*dk).toFixed(3)+")"); halo.addColorStop(1,"rgba(200,210,220,0)");
+    ctx.fillStyle=halo; ctx.beginPath(); ctx.arc(mx,my,mr*2.6,0,7); ctx.fill();
+    ctx.fillStyle="rgba(246,246,226,"+(0.9*dk).toFixed(3)+")"; ctx.beginPath(); ctx.arc(mx,my,mr,0,7); ctx.fill();
+    ctx.fillStyle="rgba(210,214,196,"+(0.35*dk).toFixed(3)+")"; ctx.beginPath(); ctx.arc(mx+mr*0.35,my-mr*0.2,mr*0.22,0,7); ctx.fill(); } }
 
 // ---- revealed-area bounds for the ground loop ----
 function revealedBounds(){ let minc=GRIDCH,maxc=-1,minr=GRIDCH,maxr=-1; for(const key of world.revealed){ const [cx,cy]=key.split(",").map(Number); minc=Math.min(minc,cx);maxc=Math.max(maxc,cx);minr=Math.min(minr,cy);maxr=Math.max(maxr,cy); }
@@ -820,7 +904,7 @@ function render(){
   for(const o of world.stakes) drawStake(o);
   const smokes=[],beacons=[]; let lighthouseTop=null; let count=0;
   for(const o of world.objs){ const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y); if(sc.x<-160||sc.x>W+160||sc.y<-300||sc.y>H+160){ o._smoke=o._beacon=o._roofTop=null; continue; }
-    if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.light<0.5?1:0); count++;
+    if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.night); count++;
       if(o._smoke){ const r=activity[o.id]; smokes.push([o._smoke,o.seed,(r&&now-r.smokeBoost<1500)?1:0]); } if(o._beacon) beacons.push(o._beacon); }
     else { drawProp(o); if(o._lighthouse) lighthouseTop=o._lighthouse; } }
   drawPresence();
@@ -835,7 +919,7 @@ function render(){
   for(const pt of beacons) drawBeacon(pt);
   if(lighthouseTop) drawLighthouseBeam(lighthouseTop);
   drawEffects();
-  if(L.light<0.98){ ctx.fillStyle="rgba(12,18,54,"+((1-L.light)*0.5).toFixed(3)+")"; ctx.fillRect(0,0,W,H); }
+  if(L.light<0.98){ ctx.fillStyle="rgba(26,32,72,"+((1-L.light)*0.40).toFixed(3)+")"; ctx.fillRect(0,0,W,H); }  // atmospheric, never pure black
   if(L.warm>0){ ctx.fillStyle="rgba(255,150,70,"+(L.warm*0.16).toFixed(3)+")"; ctx.fillRect(0,0,W,H); }
   drawWeather(L);
   const vg=ctx.createRadialGradient(W/2,H/2,H*0.35,W/2,H/2,H*0.9); vg.addColorStop(0,"rgba(0,0,0,0)"); vg.addColorStop(1,"rgba(4,3,12,.55)"); ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
@@ -854,15 +938,15 @@ function drawMinimap(){ mmx.setTransform(1,0,0,1,0,0); mmx.imageSmoothingEnabled
 // ============================ HUD ============================
 function nameOf(o){ return showRepo? o.repo : o.alias; }
 function refreshHUD(){
-  $("dayNum").textContent = mode==="timelapse"? ("day "+curDay+" / "+MAX_DAY) : "day "+(M.day||MODEL.day);
+  $("dayNum").textContent = "day "+(mode==="timelapse"? curDay : (M.day||MODEL.day));
   $("dayDate").textContent = displayDate().toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"});
+  const tld=$("tlday"); if(tld) tld.textContent="day "+curDay+" / "+MAX_DAY;
   const pct=Math.min(100,(M.stats.totalWu/ (MODEL.stats.totalWu||1))*100); $("wuBar").style.width=pct+"%";
   $("wuLbl").textContent = M.stats.totalWu.toLocaleString()+" WU total";
   $("stWU").textContent=M.stats.totalWu.toLocaleString(); $("stPop").textContent=M.stats.population; $("stRepo").textContent=M.lots.length;
   $("stPet").textContent=M.stats.pets; $("stChunk").textContent=M.chunks.length; $("stShip").textContent=M.stats.ships;
   $("stStreak").textContent=M.stats.streakDays+"d"; $("stSeed").textContent=SEED;
   const wx={clear:"&#9728; clear",rain:"&#127783; rain",fog:"&#127787; fog",snow:"&#10052; snow"}[weatherState]; $("wx").innerHTML=wx;
-  $("cityLine").innerHTML="<b>"+SEED+"</b> &middot; "+M.biome.kind+" &middot; "+pal.name;
 }
 
 // ============================ toast ============================
@@ -872,17 +956,39 @@ function showToast(name,title){ const el=$("toast"); el.querySelector(".t-title"
 // ============================ AUDIO (off by default; silent under reduced-motion) ============================
 const Audio={ctx:null,master:null,on:false,
   init(){ if(this.ctx) return; const AC=window.AudioContext||window.webkitAudioContext; if(!AC) return; this.ctx=new AC(); this.master=this.ctx.createGain(); this.master.gain.value=0.18; this.master.connect(this.ctx.destination); },
-  toggle(){ if(REDUCE) return; this.init(); if(!this.ctx) return; this.on?this.disable():this.enable(); const el=$("sound"); el.classList.toggle("on",this.on); el.querySelector(".txt").textContent="sound: "+(this.on?"on":"off"); },
+  toggle(){ if(REDUCE) return; this.init(); if(!this.ctx) return; this.on?this.disable():this.enable(); updateSoundUI(); },
   enable(){ if(this.ctx.state==="suspended") this.ctx.resume(); this.on=true; },
   disable(){ this.on=false; },
   tone(f,t0,dur,type,peak){ const c=this.ctx,o=c.createOscillator(),g=c.createGain(); o.type=type||"sine"; o.frequency.value=f; g.gain.setValueAtTime(0.0001,t0); g.gain.linearRampToValueAtTime(peak||0.4,t0+0.02); g.gain.exponentialRampToValueAtTime(0.0008,t0+dur); o.connect(g); g.connect(this.master); o.start(t0); o.stop(t0+dur+0.05); },
   ding(){ if(!this.on||!this.ctx) return; const t=this.ctx.currentTime; this.tone(880,t,0.4,"sine",0.3); this.tone(1174.7,t+0.13,0.5,"sine",0.24); },
   horn(){ if(!this.on||!this.ctx) return; const c=this.ctx,t=c.currentTime,g=c.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.5,t+0.18); g.gain.setValueAtTime(0.5,t+0.7); g.gain.exponentialRampToValueAtTime(0.001,t+1.5); const lp=c.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=520; g.connect(lp); lp.connect(this.master); [110,110.7,164.8].forEach((f,i)=>{ const o=c.createOscillator(); o.type=i<2?"triangle":"sine"; o.frequency.value=f; o.connect(g); o.start(t); o.stop(t+1.6); }); },
 };
+function updateSoundUI(){ const on=Audio.on; const b=$("sound"); if(b) b.classList.toggle("on",on);
+  const s=$("soundToggle"); if(s){ s.classList.toggle("on",on); s.textContent="ambient: "+(on?"on":"off"); } }
 $("sound").addEventListener("click",()=>Audio.toggle());
+$("soundToggle").addEventListener("click",()=>Audio.toggle());
 
 // ============================ CAMERA / INPUT ============================
 function clampCam(){ const m=200; camIx=Math.min(GRID*HW+m,Math.max(-GRID*HW-m,camIx)); camIy=Math.min(2*GRID*HH+m,Math.max(-90-m,camIy)); }
+// FIT-ALL: frame the *built* city (lots, hamlet, landmarks, origin) — never fog.
+// Picks the largest zoom that shows everything with margins, centres on it, and
+// nudges up so building height is in view. Used on load and by the ⌂ button.
+function cityTiles(){ const pts=[]; for(const o of world.lots) pts.push([o.tx,o.ty]);
+  for(const p of world.props) pts.push([p.tx,p.ty]);
+  if(world.origin) pts.push(world.origin);
+  if(M.baseline&&M.baseline.housePos) pts.push(M.baseline.housePos);
+  if(!pts.length) pts.push([world.origin?world.origin[0]:GRID/2, world.origin?world.origin[1]:GRID/2]);
+  return pts; }
+function fitCity(){ const pts=cityTiles(); let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+  for(const [tx,ty] of pts){ const c=tileCenterIso(tx,ty); if(c.x<minx)minx=c.x; if(c.x>maxx)maxx=c.x; if(c.y<miny)miny=c.y; if(c.y>maxy)maxy=c.y; }
+  const padX=70, padTop=110, padBot=60;                          // padTop leaves room for tall towers
+  const bw=(maxx-minx)+padX*2, bh=(maxy-miny)+padTop+padBot;
+  const vw=W||1200, vh=(H||800)-46;                              // usable height under the top bar
+  let bi=0; for(let i=ZOOMS.length-1;i>=0;i--){ if(bw*ZOOMS[i]<=vw && bh*ZOOMS[i]<=vh){ bi=i; break; } }
+  zi=bi; zoom=ZOOMS[zi];
+  camIx=(minx+maxx)/2;
+  camIy=(miny+maxy)/2 - (padTop-padBot)/2/zoom - 23/zoom;         // shift up for building height + top bar
+  clampCam(); dirty=true; }
 function setZoom(dir,cx,cy){ const old=zoom; zi=Math.min(ZOOMS.length-1,Math.max(0,zi+dir)); zoom=ZOOMS[zi]; if(zoom!==old&&cx!=null){ const wx=(cx-W/2)/old+camIx, wy=(cy-H/2)/old+camIy; camIx=wx-(cx-W/2)/zoom; camIy=wy-(cy-H/2)/zoom; } clampCam(); dirty=true; }
 let dragging=false,lastX=0,lastY=0,moved=0;
 cv.addEventListener("pointerdown",e=>{ dragging=true; moved=0; lastX=e.clientX; lastY=e.clientY; cv.classList.add("drag"); cv.setPointerCapture(e.pointerId); hideTip(); });
@@ -891,6 +997,7 @@ function endDrag(){ dragging=false; cv.classList.remove("drag"); }
 cv.addEventListener("pointerup",endDrag); cv.addEventListener("pointercancel",endDrag); cv.addEventListener("pointerleave",()=>{ if(!dragging) hideTip(); });
 cv.addEventListener("wheel",e=>{ e.preventDefault(); setZoom(e.deltaY<0?1:-1,e.clientX,e.clientY); },{passive:false});
 $("zin").onclick=()=>setZoom(1,W/2,H/2); $("zout").onclick=()=>setZoom(-1,W/2,H/2);
+$("fit").onclick=()=>fitCity();
 mm.addEventListener("pointerdown",e=>{ const r=mm.getBoundingClientRect(); const tx=(e.clientX-r.left)/MMCELL, ty=(e.clientY-r.top)/MMCELL; const c=tileCenterIso(tx,ty); camIx=c.x; camIy=c.y; clampCam(); dirty=true; });
 
 // tooltip
@@ -926,6 +1033,61 @@ $("rotL").addEventListener("click",()=>setOrient(orient+1));
 $("rotR").addEventListener("click",()=>setOrient(orient-1));
 window.addEventListener("keydown",e=>{ if((e.key==="r"||e.key==="R")&&!e.metaKey&&!e.ctrlKey){ setOrient(orient+1); } });
 
+// ============================ DRAWERS · SETTINGS · LOG (chrome) ============================
+function lsGet(k,def){ try{ const v=localStorage.getItem(k); return v==null?def:v; }catch(_){ return def; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(_){} }
+
+// left drawer (stats/legend/settings) + right drawer (info log); state persists.
+function setDrawer(open){ $("drawer").classList.toggle("open",open); $("menuBtn").classList.toggle("on",open); lsSet("ac_drawer",open?"1":"0"); }
+function setLogDrawer(open){ $("logDrawer").classList.toggle("open",open); $("logBtn").classList.toggle("on",open); lsSet("ac_log",open?"1":"0"); }
+$("menuBtn").addEventListener("click",()=>setDrawer(!$("drawer").classList.contains("open")));
+$("logBtn").addEventListener("click",()=>setLogDrawer(!$("logDrawer").classList.contains("open")));
+
+// brightness (item 4): auto / always day / always dusk / bright night — persisted.
+function setBright(b){ brightMode=b; lsSet("ac_bright",b); document.querySelectorAll("#bright .seg").forEach(el=>el.classList.toggle("on",el.dataset.b===b)); dirty=true; }
+document.querySelectorAll("#bright .seg").forEach(el=>el.addEventListener("click",()=>setBright(el.dataset.b)));
+
+$("fsBtn").addEventListener("click",()=>{ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(_){} });
+
+// ---- INFORMATION LOG: newest-on-top, day/time-stamped, capped, filterable ----
+const LOGCAP=200;
+const lotRepoMap=Object.create(null);
+for(const _d of DELTAS) if(_d.kind==="lot.found") lotRepoMap[_d.id]=_d.repo;
+function repoOfDelta(d){ return d.repo || lotRepoMap[d.id] || d.id || "city"; }
+function deltaMsg(d){ switch(d.kind){
+  case "baseline.init": return "city founded";
+  case "lot.found":     return repoOfDelta(d)+" founded";
+  case "lot.upgrade":   return repoOfDelta(d)+" → Tier "+d.tier+(TIER_NAME[d.tier]?" ("+TIER_NAME[d.tier]+")":"");
+  case "lot.decay":     return repoOfDelta(d)+(d.level>=2?" cracked (90d idle)":" overgrown (30d idle)");
+  case "lot.renovate":  return repoOfDelta(d)+" renovated";
+  case "road.add":      return "road laid";
+  case "road.upgrade":  return "road upgraded → tier "+d.tier;
+  case "rail.add":      return "rail line built";
+  case "chunk.reveal":  return "chunk revealed ("+d.x+","+d.y+")";
+  case "landmark.add":  return "milestone: "+(d.landmarkKind||"landmark");
+  case "ship.arrive":   return "ship arrived";
+  default:              return null;   // population.set / sync.lots → not log-worthy
+} }
+function addLogRow(when,what,cls){ const feed=$("logFeed"); if(!feed) return; const empty=$("logEmpty"); if(empty) empty.remove();
+  const row=document.createElement("div"); row.className="logrow"+(cls?(" "+cls):""); row.dataset.text=(when+" "+what).toLowerCase();
+  const w=document.createElement("div"); w.className="when"; w.textContent=when;
+  const t=document.createElement("div"); t.className="what"; t.textContent=what;
+  row.appendChild(w); row.appendChild(t); feed.insertBefore(row,feed.firstChild);
+  while(feed.children.length>LOGCAP) feed.removeChild(feed.lastChild);
+  applyLogFilter(row); }
+function logDelta(d,cls){ const msg=deltaMsg(d); if(msg==null) return; addLogRow("day "+d.day, msg, cls||(d.kind==="landmark.add"?"milestone":"")); }
+function nowClock(){ const dt=new Date(); return String(dt.getHours()).padStart(2,"0")+":"+String(dt.getMinutes()).padStart(2,"0"); }
+const ACT_VERB={"tool.pre":"agent working","tool.post":"agent working","turn.start":"turn started","turn.end":"turn complete",
+  "fork.start":"sub-agent forked","fork.end":"sub-agent done","waiting.human":"waiting on human","waiting.permission":"waiting on permission",
+  "session.start":"session started","session.end":"session ended"};
+function logActivity(a){ if(!a||!a.repo) return; const verb=ACT_VERB[a.kind]||"activity"; const tool=a.tool?(" ("+a.tool+")"):"";
+  addLogRow(nowClock(), a.repo+" · "+verb+tool, "live"); }
+function applyLogFilter(row){ const el=$("logFilter"); const q=(el&&el.value||"").trim().toLowerCase(); row.style.display=(!q||row.dataset.text.indexOf(q)>=0)?"":"none"; }
+function refilterLog(){ const feed=$("logFeed"); if(!feed) return; for(const r of feed.children){ if(r.id==="logEmpty") continue; applyLogFilter(r); } }
+$("logFilter").addEventListener("input",refilterLog);
+// backfill from the full delta history (oldest→newest so newest ends on top)
+function backfillLog(){ for(const d of DELTAS) logDelta(d); }
+
 // ============================ LIVE SSE + PRESENCE (http only; atmosphere-only) ============================
 const activity=Object.create(null);   // lotId -> {last, hits[], waiting, smokeBoost}
 let minions=[];
@@ -934,6 +1096,7 @@ function setLive(state){ const d=$("livedot"); if(!d) return; d.classList.toggle
 function applyLiveDelta(d){ if(!d||typeof d.kind!=="string"||typeof d.day!=="number") return;
   let i=DELTAS.length; while(i>0 && (DELTAS[i-1].day>d.day || (DELTAS[i-1].day===d.day && (DELTAS[i-1].seq||0)>(d.seq||0)))) i--; DELTAS.splice(i,0,d);
   if(d.day>MAX_DAY){ MAX_DAY=d.day; $("scrub").max=MAX_DAY; }
+  logDelta(d,"live");
   if(mode==="live"){ curDay=MAX_DAY; M=fold(DELTAS,curDay); world=buildWorld(M,false); syncCitizens(M.stats.population,M.stats.pets,M.stats.allNighterYesterday); if(animate) onDeltaCrossed(d); dirty=true; } }
 // activity messages -> presence effects, keyed by the matching lot (unknown -> ignored)
 function onActivity(a){ if(REDUCE||!a||!a.repo) return; const o=world.lots.find(l=>l.repo===a.repo||l.id==="L-"+a.repo); if(!o) return;
@@ -944,7 +1107,7 @@ function onActivity(a){ if(REDUCE||!a||!a.repo) return; const o=world.lots.find(
   else if(a.kind==="turn.end"){ effects.push({type:"sparkle",t:now,id:o.id}); if(Audio.on) Audio.ding(); }
   else if(a.kind==="fork.start"&&minions.length<8) minions.push({id:o.id,t:now}); }
 function handleSSE(payload){ let obj; try{ obj=JSON.parse(payload); }catch(_){ return; } if(!obj||typeof obj!=="object") return;
-  if(obj.type==="activity") onActivity(obj); else if(typeof obj.kind==="string") applyLiveDelta(obj); /* unknown message types ignored */ }
+  if(obj.type==="activity"){ logActivity(obj); onActivity(obj); } else if(typeof obj.kind==="string") applyLiveDelta(obj); /* unknown message types ignored */ }
 function initSSE(){ if(!/^https?:$/.test(location.protocol)||typeof EventSource==="undefined"){ setLive("none"); return; }
   setLive("connecting");
   try{ const es=new EventSource("/events"); es.onopen=()=>setLive("connected"); es.onerror=()=>setLive("connecting"); es.onmessage=e=>handleSSE(e.data); }
@@ -969,6 +1132,13 @@ function loop(t){ const dt=Math.min(80,t-(lastT||t)); lastT=t; now=t;
 
 // ============================ INIT ============================
 resize();
+// restore persisted UI state (brightness, drawer open/close, sound label, scrubber range)
+setBright(lsGet("ac_bright","auto"));
+setDrawer(lsGet("ac_drawer","1")==="1");     // left drawer opens by default so stats are visible
+setLogDrawer(lsGet("ac_log","0")==="1");
+updateSoundUI();
+$("scrub").max=MAX_DAY;
+backfillLog();
 setMode("live");
 // optional deep-link overrides (used by wave-2 server links + verification):
 // ?mode=timelapse|live · ?tod=<minutes 0-1439> (forces clock) · ?day=<0-90> (timelapse scrub) · ?rot=0..3
@@ -977,9 +1147,13 @@ setMode("live");
   if(q.has("rot")) orient=((+q.get("rot")%4)+4)%4;
   if(q.has("tod")){ todAuto=false; $("auto").classList.remove("on"); todMinutes=Math.max(0,Math.min(1439,+q.get("tod")||0)); $("tod").value=todMinutes; }
   if(q.has("day")){ if(mode!=="timelapse") setMode("timelapse"); tl.playing=false; setPlay(); const v=Math.max(0,Math.min(MAX_DAY,+q.get("day")||0)); tl.dayFloat=v; setDay(v,false); $("scrub").value=v; }
+  if(q.has("bright")) setBright(q.get("bright"));         // ?bright=auto|day|dusk|brightnight
+  if(q.has("menu")) setDrawer(q.get("menu")!=="0");       // ?menu / ?menu=0 — force left drawer
+  if(q.has("log")) setLogDrawer(q.get("log")!=="0");      // ?log  / ?log=0  — force info log
 })();
-// frame the city on Old Town (in the current orientation)
-(function frame(){ const o=world.origin; const c=tileCenterIso(o[0],o[1]); camIx=c.x; camIy=c.y; clampCam(); })();
+// CAMERA SANITY (item 3): always fit-all to the BUILT city on load — never open
+// on empty fog — even when a ?rot/?day deep-link is present.
+fitCity();
 initSSE();   // live feed when served over http(s); no-op on file://
 requestAnimationFrame(loop);
 if(REDUCE){ ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListener(ev,()=>{dirty=true;})); }
@@ -1009,8 +1183,8 @@ if(SELFTEST){
     res.checks.reducedMotionClean=true;
     // 5) map rotation: all 4 orientations paint every lot and re-sort cleanly
     setMode("live"); let rotOK=true; res.checks.rotBuildings=[];
-    for(let r=0;r<4;r++){ setOrient(r); render(); res.checks.rotBuildings.push(lastBuildingCount); if(lastBuildingCount!==MODEL.lots.length) rotOK=false; }
-    setOrient(0); res.checks.rotationPaintsAll=rotOK;
+    for(let r=0;r<4;r++){ setOrient(r); fitCity(); render(); res.checks.rotBuildings.push(lastBuildingCount); if(lastBuildingCount!==MODEL.lots.length) rotOK=false; }
+    setOrient(0); fitCity(); res.checks.rotationPaintsAll=rotOK;
     // 6) NO unknown-sprite fallbacks were drawn across any render above
     res.checks.unknownSprites=unknownSprites; res.checks.noUnknownSprites=(unknownSprites===0);
     // 7) live-presence: injecting synthetic activity + junk SSE messages must not error
@@ -1019,9 +1193,28 @@ if(SELFTEST){
       .forEach(s=>{ const p=s.split("|"); handleSSE(JSON.stringify({type:"activity",repo:rep,kind:p[0],tool:p[1]||undefined})); });
     handleSSE('{"type":"totally-unknown-message"}'); handleSSE('not-json-at-all'); handleSSE(':heartbeat'); handleSSE('{"kind":123}');
     render(); res.checks.activityInjectClean=true;
+    // 8) INFORMATION LOG: backfill produced rows; injected activity + a live delta both append
+    const logStart=$("logFeed").children.length;
+    res.checks.logBackfill = logStart>0;
+    handleSSE(JSON.stringify({type:"activity",repo:rep,kind:"tool.pre",tool:"Edit"}));
+    const L0=MODEL.lots[0]||{id:"x",tier:1,wu:0};
+    handleSSE(JSON.stringify({kind:"lot.upgrade",day:MAX_DAY,seq:9999999,id:L0.id,tier:Math.min(5,L0.tier),wu:L0.wu,wuIntoTier:0,wuNextTier:0,lastActiveDay:MAX_DAY}));
+    res.checks.logGrew = $("logFeed").children.length>logStart;
+    // filter box hides non-matching rows without throwing
+    $("logFilter").value="__nomatch__"; refilterLog(); $("logFilter").value=""; refilterLog();
+    res.checks.logFilterClean=true;
+    // 9) DRAWERS open/close (both sides, twice) without errors
+    setDrawer(true); setLogDrawer(true); render(); setDrawer(false); setLogDrawer(false); render();
+    $("menuBtn").click(); $("logBtn").click(); $("menuBtn").click(); $("logBtn").click();
+    res.checks.drawersToggle=true;
+    // 10) BRIGHTNESS modes all render cleanly
+    ["auto","day","dusk","brightnight"].forEach(b=>{ setBright(b); render(); }); setBright("auto");
+    res.checks.brightnessModes=true;
     res.errors=errors.slice();
     res.ok = res.checks.foldEqualsModel && res.checks.livePaintsAll && res.checks.timelapseEndMatchesLive
-      && res.checks.reducedMotionClean && res.checks.rotationPaintsAll && res.checks.noUnknownSprites && errors.length===0;
+      && res.checks.reducedMotionClean && res.checks.rotationPaintsAll && res.checks.noUnknownSprites
+      && res.checks.logBackfill && res.checks.logGrew && res.checks.drawersToggle && res.checks.brightnessModes
+      && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);
     document.title="selftest:"+(res.ok?"PASS":"FAIL");
