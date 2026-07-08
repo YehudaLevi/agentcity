@@ -152,6 +152,21 @@ for public posts). All cards carry pixel branding + day-stamp + seed-flag
 surface = retention). Strategic role: makes the share loop ambient
 (2-3 offers/week) instead of launch-only.
 
+## 4g. Transportation layer (2026-07-08) — session dynamics as traffic
+
+All derivable from existing events:
+- Road upgrades (dirt→cobble→paved→avenue) = route usage (repo worked
+  same-day as neighbors). Busy corridors become main streets.
+- Car arrives at building = session.start (agent commutes); departs on
+  session.end. Parked cars = live work, at a glance.
+- Bike courier = short session (<5 min quick fix). Bike lanes appear on
+  streets with sustained bike traffic — infrastructure adapts to work style.
+- Delivery truck + boxes = dependency installs (npm/pip in Bash detail).
+- Tram runs on coupling rails when both repos active same day.
+- Traffic jam = concurrent sessions on one repo (team-mode bottleneck viz).
+- Potholes = accumulated tool failures on that repo; repaved by successes.
+- Rush hour = real work-hour distribution mirrored in traffic density.
+
 ## 5. Solo → team dial
 
 Same compiler over merged multi-user streams: solo city (zero infra,
