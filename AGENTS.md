@@ -34,6 +34,15 @@ paths; `package.json` has ONE owner per wave.
    dist-first shim, 127.0.0.1 bind, settings-file safety, --port
    validation, plain-JS hot paths).
 7. Dry-run/test data physically separated from real data dirs.
+8. **STALE dist/**: the launcher prefers compiled code — ALWAYS `npm run
+   build` before refound/serve after engine changes (a stale dist/ silently
+   ran old rules for a full day once).
+9. Agents editing web/city.html work on a COPY and swap at the end — the
+   local server serves from disk, so the user watches mid-surgery WIP live.
+10. Timebox background agents: silent >20-30 min => nudge, then verify
+    their on-disk state yourself, then kill. Never let one ride for an hour.
+11. The user's live data dirs (~/.agentcity, ~/.pixelagents, ~/.claude) are
+    read-only for agents; refounds happen only after supervisor review.
 
 ## Commands
 
