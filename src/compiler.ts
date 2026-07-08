@@ -666,6 +666,13 @@ function emitSyncLots(st: State): void {
         wuNextTier,
         lastActiveDay: l.lastActiveDay,
         decay: l.decay,
+        // Seam fix: assembleModel derives underConstruction from
+        // lastUpgradeDay/lastRenovateDay === current day, but the delta stream
+        // has no signal a replayer can use to reconstruct it (lot.found seeds
+        // it false and nothing flips it). Carry the exact value on the final
+        // sync.lots so delta-replay lands byte-equal to the model. Only affects
+        // deltas (not the model), so golden-model stays byte-identical.
+        underConstruction: l.lastUpgradeDay === st.day || l.lastRenovateDay === st.day,
       };
     });
   emit(st, "sync.lots", { lots });

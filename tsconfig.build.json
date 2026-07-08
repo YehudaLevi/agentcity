@@ -1,0 +1,18 @@
+{
+  // Production build: compiles src/*.ts + bin/agentcity.ts to plain ESM .js
+  // under dist/, so a real npm/npx install never needs tsx (a devDependency) at
+  // runtime. See bin/agentcity.js for the launcher that picks this up when
+  // present and falls back to tsx in a dev checkout with no dist/.
+  //
+  // No bundler, no new deps — tsc only. Tests (test/**) and vitest.config.ts
+  // are excluded: they run straight off source via vitest/tsx, never off dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "bin/agentcity.ts"]
+}

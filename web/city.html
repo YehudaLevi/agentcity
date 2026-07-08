@@ -301,7 +301,7 @@ function fold(list, upto){
         if(d.allNighterYesterday!=null) m.stats.allNighterYesterday=d.allNighterYesterday;
         break;
       case "sync.lots":
-        for(const s of d.lots){ const l=lotById[s.id]; if(l){ l.wu=s.wu; l.wuIntoTier=s.wuIntoTier; l.wuNextTier=s.wuNextTier; l.lastActiveDay=s.lastActiveDay; l.decay=s.decay; } }
+        for(const s of d.lots){ const l=lotById[s.id]; if(l){ l.wu=s.wu; l.wuIntoTier=s.wuIntoTier; l.wuNextTier=s.wuNextTier; l.lastActiveDay=s.lastActiveDay; l.decay=s.decay; if(s.underConstruction!=null) l.underConstruction=s.underConstruction; } }
         break;
     }
   }
