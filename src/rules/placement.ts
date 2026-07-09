@@ -71,6 +71,49 @@ function setWater(g: Geo, x: number, y: number): void {
   }
 }
 
+// River channel half-width. The swept-disk carve guarantees the open channel is
+// at least 2*RIVER_R tiles wide everywhere along the course (>= 3 by a wide
+// margin at RIVER_R=3), matching the ~7-wide straight sections of the old band.
+export const RIVER_R = 3;
+
+/** Euclidean distance from point (px,py) to segment (ax,ay)-(bx,by). */
+function distToSegment(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 === 0 ? 0 : ((px - ax) * dx + (py - ay) * dy) / len2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/**
+ * Carve a river by sweeping a disk of radius RIVER_R along the centreline
+ * poly-line `centre(0..n-1)`: every tile within RIVER_R of a segment becomes
+ * water. Unlike an axis-aligned per-scanline band, a swept disk has a CONSTANT
+ * cross-section perpendicular to flow, so the channel never pinches at bends.
+ * Pure f(centre): no RNG, so terrain stays seed-deterministic.
+ */
+function carveChannel(g: Geo, centre: (a: number) => Coord, n: number): void {
+  const rc = Math.ceil(RIVER_R);
+  for (let a = 0; a < n - 1; a++) {
+    const [ax, ay] = centre(a);
+    const [bx, by] = centre(a + 1);
+    const lox = Math.min(ax, bx) - rc;
+    const hix = Math.max(ax, bx) + rc;
+    const loy = Math.min(ay, by) - rc;
+    const hiy = Math.max(ay, by) + rc;
+    for (let y = loy; y <= hiy; y++) {
+      for (let x = lox; x <= hix; x++) {
+        if (distToSegment(x, y, ax, ay, bx, by) <= RIVER_R) setWater(g, x, y);
+      }
+    }
+  }
+}
+
 /** Generate base terrain (water/elev/sand) deterministically from the seed. */
 export function genTerrain(g: Geo): void {
   const { seed, biome } = g;
@@ -95,15 +138,21 @@ export function genTerrain(g: Geo): void {
       }
     }
   } else if (biome === "river") {
+    // River channel: a fixed-radius disk swept along the meandering centreline
+    // (a "capsule" between consecutive centre points). The old per-scanline band
+    // (`for w=-3..3`) laid a 7-wide span PERPENDICULAR TO THE SCAN AXIS, so where
+    // the river turned to flow *along* that axis its visible width collapsed to
+    // ~1 tile (the meander-bend pinch users saw). Sweeping a radius-RIVER_R disk
+    // along the actual course keeps the open water >= 2*RIVER_R wide everywhere —
+    // bends included — while preserving the exact meander (centreline formula
+    // unchanged) and determinism (seed-only: vert/phase from rand, no RNG).
     const vert = rand(seed, "river:vert") < 0.5;
     const phase = rand(seed, "river:phase") * 6.28;
-    for (let a = 0; a < GRID; a++) {
+    const centre = (a: number): Coord => {
       const c = Math.round(CENTER + Math.sin(a * 0.16 + phase) * 16 + Math.sin(a * 0.5) * 5);
-      for (let w = -3; w <= 3; w++) {
-        if (vert) setWater(g, c + w, a);
-        else setWater(g, a, c + w);
-      }
-    }
+      return vert ? [c, a] : [a, c];
+    };
+    carveChannel(g, centre, GRID);
   } else if (biome === "lakes") {
     const nl = 2 + randInt(seed, "lakes:n", 3);
     for (let i = 0; i < nl; i++) {

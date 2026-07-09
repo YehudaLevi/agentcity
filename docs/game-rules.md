@@ -104,7 +104,9 @@ rises, roof lifts back. Timelapse compresses stages; live plays them.
 ## 6. Uniqueness (no two cities alike)
 
 Seed = hash(machine-id + user) determines:
-- **Biome**: coastal / river / lakes / hills (affects water, elevation)
+- **Biome**: coastal / river / lakes / hills (affects water, elevation).
+  Rivers are never narrower than 3 tiles anywhere along their course,
+  including meander bends (user rule, 2026-07-09).
 - Origin quadrant + growth direction bias
 - Palette accent family + roof/material variants
 - Road style (cobble/asphalt/dirt-first)
