@@ -1,8 +1,13 @@
 {
   "name": "agentcity",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Your work builds a city. Your agent is the architect.",
+  "version": "0.1.0",
+  "description": "Your work builds a city. Your agent is the architect. A persistent, local-first pixel city compiled from your AI-coding-agent activity.",
+  "license": "MIT",
+  "author": "Yehuda Levi",
+  "repository": { "type": "git", "url": "git+https://github.com/YehudaLevi/agentcity.git" },
+  "homepage": "https://github.com/YehudaLevi/agentcity#readme",
+  "bugs": { "url": "https://github.com/YehudaLevi/agentcity/issues" },
+  "keywords": ["ai-agents", "claude-code", "visualization", "pixel-art", "isometric", "city", "developer-tools", "local-first", "gamification"],
   "type": "module",
   "engines": { "node": ">=20" },
   "bin": {

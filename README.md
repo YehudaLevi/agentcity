@@ -6,11 +6,11 @@ A persistent pixel-art city that grows out of your AI-coding-agent activity — 
 
 It's not a dashboard. It's a place.
 
-![90 days of work growing into a city — demo data](media/city-growth.gif)
+![90 days of work growing into a city — demo data](https://raw.githubusercontent.com/YehudaLevi/agentcity/main/media/city-growth.gif)
 
 *90 days of (demo) work, replayed as the Founding Timelapse: first huts, streets, districts, towers — and a hover card for any building.*
 
-![agentcity — a river city at day](media/city-day.png)
+![agentcity — a river city at day](https://raw.githubusercontent.com/YehudaLevi/agentcity/main/media/city-day.png)
 
 ## What you're looking at
 
@@ -28,7 +28,7 @@ It's not a dashboard. It's a place.
 
 And when your agent is working **right now**, a beam of light rises from that building into the sky — gold for editing, orange for shell work, cyan for reading, violet for the web, green for subagents. A completed task pops a small firework at the beam's top. When the agent is blocked waiting on *you*, the beam turns black-and-white and blinks slowly. You can read your whole fleet's status from across the room.
 
-![agentcity at night — sky beams over the city](media/city-night.png)
+![agentcity at night — sky beams over the city](https://raw.githubusercontent.com/YehudaLevi/agentcity/main/media/city-night.png)
 
 ## The invariant
 
@@ -53,23 +53,27 @@ agentcity reads your **existing** local agent history at founding and replays it
 ## Quick start
 
 ```bash
-git clone https://github.com/YehudaLevi/agentcity.git
-cd agentcity
-npm install
-npm run build
-node bin/agentcity.js          # → http://127.0.0.1:4243
+npx agentcity            # founds your city from local history → http://127.0.0.1:4243
 ```
 
 No agent history yet? Take it for a spin with simulated activity:
 
 ```bash
-npx . --demo
+npx agentcity --demo
 ```
 
 Recompile the city from your archives (e.g. to try a different geography):
 
 ```bash
-node bin/agentcity.js refound --yes --seed <any-string>
+npx agentcity refound --yes --seed <any-string>
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/YehudaLevi/agentcity.git
+cd agentcity && npm install && npm run build
+node bin/agentcity.js
 ```
 
 ## Around the map
