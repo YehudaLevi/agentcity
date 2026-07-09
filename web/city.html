@@ -939,10 +939,9 @@ function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
   if(isRoad||isStone) drawRoadTile(x,y,top,cx,cy,isStone);
 }
 
-function drawRails(){ for(const r of world.rails){ const path=r.path; for(let i=1;i<path.length;i++){ const a=tileCenterIso(path[i-1][0],path[i-1][1]), b=tileCenterIso(path[i][0],path[i][1]); const sa=projWorld(a.x,a.y), sb=projWorld(b.x,b.y);
-  ctx.strokeStyle="rgba(60,56,70,.9)"; ctx.lineWidth=2.5*zoom; ctx.beginPath(); ctx.moveTo(sa.x,sa.y); ctx.lineTo(sb.x,sb.y); ctx.stroke();
-  ctx.strokeStyle="rgba(120,110,90,.7)"; ctx.lineWidth=1; const n=Math.max(1,Math.floor(Math.hypot(sb.x-sa.x,sb.y-sa.y)/(5*zoom)));
-  for(let k=1;k<n;k++){ const t=k/n, mx=sa.x+(sb.x-sa.x)*t, my=sa.y+(sb.y-sa.y)*t, dx=(sb.y-sa.y), dy=-(sb.x-sa.x), dl=Math.hypot(dx,dy)||1; ctx.beginPath(); ctx.moveTo(mx-dx/dl*2*zoom,my-dy/dl*2*zoom); ctx.lineTo(mx+dx/dl*2*zoom,my+dy/dl*2*zoom); ctx.stroke(); } } } }
+// rails (repo coupling) intentionally NOT rendered — the line art read as "pipes"
+// (user, 2026-07-09). model.rails/rail.add are still folded + logged, so future
+// rail art (proper ties/level crossings, plan §4c) can render without engine work.
 
 function drawProp(o){ const c=tileCenterIso(o.tx,o.ty), s2=projWorld(c.x,c.y-o.elev), x=s2.x,y=s2.y,z=zoom;
   switch(o.type){
@@ -1069,7 +1068,6 @@ function render(){
   ctx.setTransform(DPR,0,0,DPR,0,0); ctx.imageSmoothingEnabled=false; skyBg(L);
   ensureDrawOrder();
   for(const [x,y] of tileOrder){ const c=tileCenterIso(x,y), sc=projWorld(c.x,c.y); if(sc.x<-80||sc.x>W+80||sc.y<-120||sc.y>H+140) continue; drawTile(x,y); }
-  drawRails();
   for(const o of world.stakes) drawStake(o);
   const smokes=[],beacons=[]; let lighthouseTop=null; let count=0;
   // Merge citizens into the buildings/props depth pass so a citizen behind a tower is
