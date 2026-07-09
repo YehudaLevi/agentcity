@@ -118,6 +118,12 @@ interface State {
   day: number;
   foundedTs: string;
   deltas: CityDelta[];
+  // True only while the OPEN (still-provisional) day is being folded in
+  // finalize. The open day is re-derived on every resume, so a chunk.reveal
+  // emitted for it would be duplicated on each poll (see surveyStep). Committed
+  // days (runCommitted) leave this false and emit normally. Runtime-only — never
+  // serialized (each fold sets it fresh).
+  foldingOpenDay: boolean;
 }
 
 function emit(st: State, kind: DeltaKind, fields: Record<string, unknown>): void {
@@ -209,6 +215,7 @@ function initState(seed: string, config: CityConfig): State {
     day: 0,
     foundedTs: "",
     deltas: [],
+    foldingOpenDay: false,
   };
 
   buildBaseline(st);
@@ -397,10 +404,21 @@ function foundLot(st: State, a: Activity): void {
 
 /** If lot density has grown enough, survey one new district and log the moment.
  * Emits chunk.reveal{surveyed:true}; terrain existence is NOT touched (all chunks
- * are already revealed in the model). */
+ * are already revealed in the model).
+ *
+ * maybeSurvey ALWAYS runs (it mutates geo.surveyed, which feeds later survey
+ * decisions this fold), but the chunk.reveal is emitted ONLY on committed days.
+ * The open day is re-derived on every resume from an un-advanced surveyed set
+ * (the checkpoint commits surveyed through openDay-1, before the open day folds),
+ * so emitting here would re-survey and re-emit the SAME chunk on every poll —
+ * the day7:52 duplicate-reveal bug. Deferring emission to when the day becomes
+ * committed (runCommitted, foldingOpenDay=false) makes each chunk.reveal fire
+ * exactly once, on the same day, whether reached by a full or incremental fold. */
 function surveyStep(st: State): void {
   const picked = maybeSurvey(st.geo, st.geo.surveyed.size);
-  if (picked) emit(st, "chunk.reveal", { x: picked.cx, y: picked.cy, revealedDay: st.day, surveyed: true });
+  if (picked && !st.foldingOpenDay) {
+    emit(st, "chunk.reveal", { x: picked.cx, y: picked.cy, revealedDay: st.day, surveyed: true });
+  }
 }
 
 function detectCoupling(st: State, acts: Activity[]): void {
@@ -821,6 +839,7 @@ function deserializeState(cp: Checkpoint, config: CityConfig): State {
     day: s.day,
     foundedTs: s.foundedTs,
     deltas: [],
+    foldingOpenDay: false,
   };
   return st;
 }
@@ -903,8 +922,12 @@ function finalize(
 
   // Overlay the OPEN day onto the live state to build the served model + deltas.
   // This is the one day that gets re-derived on every resume (from cp.pending).
+  // foldingOpenDay suppresses chunk.reveal for this provisional day (surveyStep):
+  // it is re-emitted once, for good, when a later fold completes the day.
   st.day = openDay;
+  st.foldingOpenDay = true;
   stepDay(st, openEvents);
+  st.foldingOpenDay = false;
   // back-patch the day-0 baseline.init delta with final biome so the renderer's
   // delta-replay reconstructs model.biome (a no-op for incremental folds, whose
   // baseline.init lives in the earlier checkpoint's delta log).
