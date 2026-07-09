@@ -189,13 +189,19 @@ rest. Config knob `history_influence: full|capped` (default full).
 
 Minute-scale feedback riding the SSE stream as {"type":"activity",repo,kind,
 tool} messages (server poll pushes them alongside fold deltas). Atmosphere
-only — never map state, never determinism-relevant:
-- active repo (last 60s) → 1-4 birds circling that roof (rate-scaled)
-- Bash bursts → chimney puffs quicken · Edit bursts → window flicker
-- turn.end → roof sparkle (+ chime if sound on)
-- fork.start → minion scurries in the door (pixelagents crossover)
-- waiting.human → beacon + birds perch
-- caps (≤10 birds global), reduced-motion excluded
+only — never map state, never determinism-relevant.
+AMENDED 2026-07-09 (user direction): birds replaced by **sky beams** —
+- active repo (last 60s) → a vertical light beam from that roof into the
+  sky, gently pulsing; fades out on inactivity
+- beam color = current work type: Edit/Write gold · Bash orange ·
+  Read/Grep cyan · Web violet · fork/subagent green
+- turn.end → small firework burst from the beam top (milestone fireworks
+  stay reserved for landmarks)
+- waiting.human/permission → beam goes black/white (pale monochrome, slow
+  blink) until activity resumes
+- Bash bursts → chimney puffs quicken · Edit bursts → window flicker (kept)
+- fork.start → minion scurries in the door (kept)
+- reduced-motion: beams render static (no pulse), no fireworks
 Complements the accumulation layer: tiers answer "what did I build",
 presence answers "what is happening right now".
 

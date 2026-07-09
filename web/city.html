@@ -314,8 +314,12 @@ function screenToTile(sx,sy){ const ix=(sx-W/2)/zoom+camIx, iy=(sy-H/2)/zoom+cam
   const rx=(ix/HW+iy/HH)/2, ry=(iy/HH-ix/HW)/2;   // rotated gridline coords of the tile centre
   const m=invRot(rx,ry); return{tx:m[0]-0.5, ty:m[1]-0.5}; }
 
-function shade(hex,f){const n=parseInt(hex.slice(1),16);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;r=Math.min(255,Math.max(0,Math.round(r*f)));g=Math.min(255,Math.max(0,Math.round(g*f)));b=Math.min(255,Math.max(0,Math.round(b*f)));return"rgb("+r+","+g+","+b+")";}
-function mix(a,b,t){const pa=parseInt(a.slice(1),16),pb=parseInt(b.slice(1),16);const r=Math.round(((pa>>16)&255)*(1-t)+((pb>>16)&255)*t);const g=Math.round(((pa>>8)&255)*(1-t)+((pb>>8)&255)*t);const bl=Math.round((pa&255)*(1-t)+(pb&255)*t);return"rgb("+r+","+g+","+bl+")";}
+// cnum accepts "#rrggbb" OR "rgb(r,g,b)" so shade()/mix() compose (shade(mix(..)),
+// mix(mix(..)) — feeding mix's rgb() output into a hex-only parser NaN'd to black).
+function cnum(c){ if(c[0]==="#") return parseInt(c.slice(1),16); const m=c.match(/\d+/g); return ((+m[0])<<16)|((+m[1])<<8)|(+m[2]); }
+function shade(col,f){const n=cnum(col);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;r=Math.min(255,Math.max(0,Math.round(r*f)));g=Math.min(255,Math.max(0,Math.round(g*f)));b=Math.min(255,Math.max(0,Math.round(b*f)));return"rgb("+r+","+g+","+b+")";}
+function mix(a,b,t){const pa=cnum(a),pb=cnum(b);const r=Math.round(((pa>>16)&255)*(1-t)+((pb>>16)&255)*t);const g=Math.round(((pa>>8)&255)*(1-t)+((pb>>8)&255)*t);const bl=Math.round((pa&255)*(1-t)+(pb&255)*t);return"rgb("+r+","+g+","+bl+")";}
+function rgba(col,a){const n=cnum(col);return"rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+Math.max(0,a).toFixed(3)+")";}
 
 // ============================ rules-vocabulary (styling only; NOT simulation) ============================
 // Each family carries a distinct MATERIAL identity so districts read apart at a
@@ -342,13 +346,18 @@ const PALETTES=[
 ];
 const ROADSTYLES=["cobble","asphalt","dirt"];
 
-// ============================ CONTRACT REDUCER (identical to fixture-city.js fold) ============================
+// ============================ CONTRACT REDUCER ============================
 // Renderer input is CityModel+CityDelta. Both live view and the founding
 // timelapse go through THIS fold, so timelapse@90 === live view, byte-exact.
+// FULL-REVEAL TERRAIN (game-rules §5 amended): the whole GRIDCH×GRIDCH world is
+// generated from seed and visible from day 0. Every chunk is revealed in the
+// model from day 0; chunk.reveal deltas no longer create map — they are
+// "district surveyed" moments (flavor/log; see buildWorld's surveyed set).
+function allChunksRevealed(){ const a=[]; for(let x=0;x<GRIDCH;x++)for(let y=0;y<GRIDCH;y++) a.push({x,y,revealed:true,revealedDay:0}); return a; }
 function fold(list, upto){
   const m={version:1,seed:"",day:upto,foundedTs:"",
     biome:{kind:"coastal",water:[],origin:[0,0],growthDir:"NE"},
-    chunks:[],roads:[],rails:[],lots:[],landmarks:[],
+    chunks:allChunksRevealed(),roads:[],rails:[],lots:[],landmarks:[],
     stats:{totalWu:0,population:0,pets:0,ships:0,streakDays:0,allNighterYesterday:false},
     baseline:null};
   const lotById={},roadById={};
@@ -358,7 +367,7 @@ function fold(list, upto){
         m.seed=d.seed; m.foundedTs=d.foundedTs;
         m.biome={kind:d.biome.kind,water:d.biome.water,origin:d.biome.origin,growthDir:d.biome.growthDir};
         m.baseline=d.baseline; break;
-      case "chunk.reveal": m.chunks.push({x:d.x,y:d.y,revealed:true,revealedDay:d.revealedDay}); break;
+      case "chunk.reveal": break;   // full-reveal: not map existence — a "district surveyed" moment (info log + survey-stake foreshadow; chunks already all revealed)
       case "lot.found":{ const lot={id:d.id,repo:d.repo,alias:d.alias,category:d.category,secondary:d.secondary,
         pos:d.pos,tier:d.tier,wu:d.wu,wuIntoTier:d.wuIntoTier,wuNextTier:d.wuNextTier,foundedDay:d.foundedDay,
         lastActiveDay:d.lastActiveDay,decay:0,underConstruction:false,variant:d.variant};
@@ -400,12 +409,10 @@ const roadStyle = ROADSTYLES[(H0>>>6)%ROADSTYLES.length];
 // ============================ WORLD BUILD (folded model -> render geometry) ============================
 function inGrid(x,y){ return x>=0&&y>=0&&x<GRID&&y<GRID; }
 let now=0, animate=!REDUCE;
-let chunkRevealAnim={};   // chunkKey -> wall-clock ms when it first appeared (fog recede)
-let seenChunks=new Set();
 let worldSeq=0, tileOrder=[], _drawKey="";   // rotation-aware painter order cache
 
 function buildWorld(m, isTimelapse){
-  const w={ground:[],revealed:new Set(),revealDay:{},roadTierAt:{},roadSet:new Set(),roadTiles:[],
+  const w={ground:[],revealed:new Set(),roadTierAt:{},roadSet:new Set(),roadTiles:[],
     lots:[],props:[],stakes:[],rails:m.rails||[],objs:[],fireworksSpots:[],
     origin:(m.biome&&m.biome.origin)||[25,25], dock:null, biome:m.biome};
   const hills=m.biome&&m.biome.kind==="hills";
@@ -421,14 +428,13 @@ function buildWorld(m, isTimelapse){
   for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ if(w.ground[y][x].t==="water") continue; let near=false;
     for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(inGrid(x+ox,y+oy)&&w.ground[y+oy][x+ox].t==="water") near=true;
     if(near){ w.ground[y][x].t="sand"; w.ground[y][x].elev=0; } }
-  // revealed chunks (+ fog-recede animation bookkeeping)
-  for(const c of m.chunks){ const k=c.x+","+c.y; w.revealed.add(k); w.revealDay[k]=c.revealedDay;
-    if(!seenChunks.has(k)){ seenChunks.add(k); chunkRevealAnim[k]=(isTimelapse&&animate)? now : 0; } }
-  const chunkRevealed=(x,y)=> w.revealed.has(((x/CHUNK)|0)+","+((y/CHUNK)|0));
-  // elevation only exists on revealed ground — fog stays flat (never carve cliffs into unrevealed map)
-  if(hills) for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ if(w.ground[y][x].elev>0 && !chunkRevealed(x,y)) w.ground[y][x].elev=0; }
+  // full-reveal: every chunk exists and is visible from day 0 (geography before buildings).
+  for(const c of m.chunks) w.revealed.add(c.x+","+c.y);
+  // chunk.reveal deltas are "district surveyed" moments now — the surveyed set (deltas up
+  // to the current day) drives the foreshadowing survey stakes; it never gates terrain.
+  const surveyed=new Set(); for(const d of DELTAS){ if(d.day>m.day) break; if(d.kind==="chunk.reveal") surveyed.add(d.x+","+d.y); }
   // roads (paint every tile along the waypoint polyline)
-  function setRoad(x,y,tier,type){ if(!inGrid(x,y)||!chunkRevealed(x,y)) return; const c=w.ground[y][x]; if(c.t==="water") return;
+  function setRoad(x,y,tier,type){ if(!inGrid(x,y)) return; const c=w.ground[y][x]; if(c.t==="water") return;
     if(c.t!=="stone") c.t=type||"road"; const k=x+","+y; w.roadTierAt[k]=Math.max(w.roadTierAt[k]||0,tier);
     if(!w.roadSet.has(k)){ w.roadSet.add(k); w.roadTiles.push([x,y]); } }
   function paintPath(path,tier){ for(let i=0;i<path.length;i++){ const [x0,y0]=path[i]; setRoad(x0,y0,tier);
@@ -436,7 +442,7 @@ function buildWorld(m, isTimelapse){
   for(const r of (m.roads||[])) paintPath(r.path, r.tier);
   if(m.baseline&&m.baseline.roadPath) paintPath(m.baseline.roadPath, 1);
   // origin plaza (stone)
-  const [ox,oy]=w.origin; if(inGrid(ox,oy)&&chunkRevealed(ox,oy)&&w.ground[oy][ox].t!=="water"){ w.ground[oy][ox].t="stone"; const k=ox+","+oy; if(!w.roadSet.has(k)){w.roadSet.add(k);w.roadTiles.push([ox,oy]);} }
+  const [ox,oy]=w.origin; if(inGrid(ox,oy)&&w.ground[oy][ox].t!=="water"){ w.ground[oy][ox].t="stone"; const k=ox+","+oy; if(!w.roadSet.has(k)){w.roadSet.add(k);w.roadTiles.push([ox,oy]);} }
   // lots -> building objects
   for(const l of m.lots){ const o={ id:l.id, name:l.repo, alias:l.alias, repo:l.repo, category:l.category, secondary:l.secondary,
       tx:l.pos[0], ty:l.pos[1], fw:1, fd:1, elev:0, kind:"building", info:FAM[l.category]||FAM.code,
@@ -452,13 +458,14 @@ function buildWorld(m, isTimelapse){
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(inGrid(x+dx,y+dy)&&w.ground[y+dy][x+dx].t==="water"){ w.dock=[x+dx,y+dy]; break; } if(w.dock) break; }
   if(!w.dock && m.biome&&m.biome.water&&m.biome.water.length) w.dock=m.biome.water[Math.floor(m.biome.water.length/2)].slice();
   // lighthouse on the shore near the harbor (land/sand tile adjacent to water, max x+y)
-  if(w.dock){ let best=null,bs=-1; for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ const t=w.ground[y][x].t; if((t!=="sand"&&t!=="grass"&&t!=="grass2")||!chunkRevealed(x,y)) continue;
+  if(w.dock){ let best=null,bs=-1; for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ const t=w.ground[y][x].t; if(t!=="sand"&&t!=="grass"&&t!=="grass2") continue;
     let touch=false; for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(inGrid(x+dx,y+dy)&&w.ground[y+dy][x+dx].t==="water") touch=true; if(!touch) continue;
     const s=x+y; if(s>bs){bs=s;best=[x,y];} } if(best) addProp("lighthouse",best); }
-  // survey stakes: a couple tiles in fog chunks adjacent to revealed, in growth dir (foreshadow)
-  for(const k of w.revealed){ const [cx,cy]=k.split(",").map(Number);
+  // survey stakes: foreshadow growth — a couple tiles in UNSURVEYED chunks adjacent to a
+  // surveyed district, in the growth dir. Same seeded positions as before (deterministic).
+  for(const k of surveyed){ const [cx,cy]=k.split(",").map(Number);
     for(const [ox2,oy2] of [[1,0],[0,-1],[1,-1]]){ const nx=cx+ox2, ny=cy+oy2; if(nx<0||ny<0||nx>=GRIDCH||ny>=GRIDCH) continue;
-      if(w.revealed.has(nx+","+ny)) continue; const sx=nx*CHUNK+3+((hashStr(k+nx+ny)%4)), sy=ny*CHUNK+3+((hashStr(k+ny+nx)%4));
+      if(surveyed.has(nx+","+ny)) continue; const sx=nx*CHUNK+3+((hashStr(k+nx+ny)%4)), sy=ny*CHUNK+3+((hashStr(k+ny+nx)%4));
       if(w.stakes.length<4 && !w.stakes.some(s=>s.tx===sx&&s.ty===sy)) w.stakes.push({tx:sx,ty:sy}); } }
   w._id=++worldSeq;
   return w;
@@ -508,39 +515,129 @@ function rebuild(){ const prevLots=world&&world.lots; M=fold(DELTAS,curDay); wor
 const PALS=[["#c85a4a","#3a3550"],["#4a80c8","#2f2a40"],["#e0b040","#4a4030"],["#5aa06a","#2f3436"],["#b070c0","#3a2f4a"],["#d0d0c0","#4a4a52"],["#e08a50","#40342a"],["#7fb0b0","#2f3440"]];
 const SKINS=["#f0d0a8","#d8a878","#b88858","#e8c0a0"];
 let citizens=[];
-function spawnCitizen(withPet){ if(!world.roadTiles.length) return null; const st=world.roadTiles[Math.floor(Math.random()*world.roadTiles.length)]; const pal=PALS[Math.floor(Math.random()*PALS.length)];
-  return {cx:st[0],cy:st[1],tx:st[0],ty:st[1],px:st[0],py:st[1],f:Math.random(),sp:0.0009+Math.random()*0.0009,
+// citizens/pets may ONLY occupy road tiles that no lot (building) or prop sits on — never
+// rooftops, water, or props. Cache the walkable subset of world.roadTiles per world instance.
+let _walkId=-1, _walkTiles=[], _walkSet=new Set();
+function ensureWalk(){ if(_walkId===world._id) return; const occ=new Set();
+  for(const o of world.lots) occ.add(o.tx+","+o.ty); for(const p of world.props) occ.add(p.tx+","+p.ty);
+  _walkTiles=world.roadTiles.filter(t=>!occ.has(t[0]+","+t[1])); _walkSet=new Set(_walkTiles.map(t=>t[0]+","+t[1])); _walkId=world._id; }
+function walkable(x,y){ return _walkSet.has(x+","+y); }
+function spawnCitizen(withPet){ ensureWalk(); if(!_walkTiles.length) return null; const st=_walkTiles[Math.floor(Math.random()*_walkTiles.length)]; const pal=PALS[Math.floor(Math.random()*PALS.length)];
+  return {cx:st[0],cy:st[1],tx:st[0],ty:st[1],px:st[0],py:st[1],f:Math.random(),sp:0.00045+Math.random()*0.00045,
     coat:pal[0],pants:pal[1],skin:SKINS[Math.floor(Math.random()*SKINS.length)],hat:Math.random()<0.4,phase:Math.random()*6.28,
     hist:[],pet:withPet?(Math.random()<0.5?"dog":"cat"):null,standing:false}; }
 function syncCitizens(pop,pets,allNighter){
+  ensureWalk();
   citizens=citizens.filter(c=>!c.allnighter);
+  // world may have changed (new lots): relocate any citizen now standing off a walkable tile
+  for(const c of citizens){ if(walkable(c.cx,c.cy)&&walkable(c.tx,c.ty)) continue; const st=_walkTiles.length?_walkTiles[Math.floor(Math.random()*_walkTiles.length)]:null;
+    if(st){ c.cx=c.tx=c.px=st[0]; c.cy=c.ty=c.py=st[1]; c.f=Math.random(); c.hist.length=0; } }
   while(citizens.length<pop){ const c=spawnCitizen(false); if(!c) break; citizens.push(c); }
   while(citizens.length>pop) citizens.pop();
   let withPet=citizens.filter(c=>c.pet).length;
   for(const c of citizens){ if(withPet>=pets) break; if(!c.pet){ c.pet=Math.random()<0.5?"dog":"cat"; withPet++; } }
   for(const c of citizens){ if(withPet<=pets) break; if(c.pet){ c.pet=null; withPet--; } }
-  if(allNighter && world.roadTiles.length){ const rt=world.roadTiles[Math.floor(hashStr(SEED+"nighter")%world.roadTiles.length)];
+  if(allNighter && _walkTiles.length){ const rt=_walkTiles[Math.floor(hashStr(SEED+"nighter")%_walkTiles.length)];
     citizens.push({cx:rt[0],cy:rt[1],tx:rt[0],ty:rt[1],px:rt[0],py:rt[1],f:0,sp:0,coat:"#5a6a8a",pants:"#2a2a38",skin:"#e8c0a0",hat:true,phase:0,hist:[],pet:null,standing:true,allnighter:true}); }
 }
-function roadNeighbors(x,y){ const out=[]; for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(world.roadSet.has((x+ox)+","+(y+oy))) out.push([x+ox,y+oy]); return out; }
+function roadNeighbors(x,y){ ensureWalk(); const out=[]; for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(walkable(x+ox,y+oy)) out.push([x+ox,y+oy]); return out; }
 function updateCitizens(dt){ if(!animate) return; const boost=mode==="timelapse"?(1+tl.speed*0.02):1;
   for(const c of citizens){ if(c.standing){ c.px=c.cx; c.py=c.cy; continue; } c.f+=c.sp*dt*boost;
     while(c.f>=1){ c.f-=1; const fx=c.cx,fy=c.cy; c.cx=c.tx; c.cy=c.ty; let ns=roadNeighbors(c.cx,c.cy).filter(n=>!(n[0]===fx&&n[1]===fy)); if(!ns.length) ns=roadNeighbors(c.cx,c.cy);
       if(!ns.length){ c.tx=fx; c.ty=fy; } else { const n=ns[Math.floor(Math.random()*ns.length)]; c.tx=n[0]; c.ty=n[1]; } }
     c.px=c.cx+(c.tx-c.cx)*c.f; c.py=c.cy+(c.ty-c.cy)*c.f; if(c.pet){ c.hist.push({x:c.px,y:c.py}); if(c.hist.length>50) c.hist.shift(); } } }
 
+// ============================ SHEEP (ambient countryside; graze on WILD grass) ============================
+// Flocks live in the meadows: tiles that are grass/grass2, NOT under or orthogonally adjacent
+// to any lot/prop, and >= SHEEP_FAR tiles from the nearest road (so they read as countryside,
+// not lawn ornaments between towers). The valid-tile set + a road-distance field are cached per
+// world instance (like the walk cache). Flock ANCHORS are seeded deterministically from SEED via
+// hashStr (same meadows across reloads for the same terrain, like the survey stakes); individual
+// wander uses Math.random (atmosphere layer). World rebuilds (world._id change) => respawn.
+const SHEEP_FAR=6, SHEEP_CAP=12, SHEEP_R=3;   // road-distance, total cap, wander radius from anchor
+let sheep=[], _sheepId=-1, _sheepTileId=-1, _sheepTiles=[], _sheepSet=new Set();
+function ensureSheepTiles(){ if(_sheepTileId===world._id) return; _sheepTileId=world._id;
+  const occ=new Set(); for(const o of world.lots) occ.add(o.tx+","+o.ty); for(const p of world.props) occ.add(p.tx+","+p.ty);
+  // multi-source BFS: distance (in 4-steps) from the nearest road tile
+  const dist=new Int16Array(GRID*GRID).fill(-1); let q=[];
+  for(const [x,y] of world.roadTiles){ dist[y*GRID+x]=0; q.push([x,y]); }
+  for(let h=0;h<q.length;h++){ const [x,y]=q[h], d=dist[y*GRID+x];
+    for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const nx=x+ox,ny=y+oy; if(!inGrid(nx,ny)) continue; const i=ny*GRID+nx; if(dist[i]<0){ dist[i]=d+1; q.push([nx,ny]); } } }
+  _sheepTiles=[]; _sheepSet=new Set();
+  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ const t=world.ground[y][x].t; if(t!=="grass"&&t!=="grass2") continue;
+    const d=dist[y*GRID+x]; if(d>=0 && d<SHEEP_FAR) continue;   // too close to a road (d<0 => no road reachable => OK, far)
+    let bad=occ.has(x+","+y); if(!bad) for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(occ.has((x+ox)+","+(y+oy))){ bad=true; break; }
+    if(bad) continue; _sheepTiles.push([x,y]); _sheepSet.add(x+","+y); } }
+function sheepTileOK(x,y){ return _sheepSet.has(x+","+y); }
+function ensureSheep(){ if(_sheepId===world._id) return; _sheepId=world._id; sheep=[]; ensureSheepTiles();
+  if(!_sheepTiles.length) return; let lambs=0;
+  const nFlocks=2+(hashStr(SEED+"sheepN")%2);   // 2 or 3 flocks
+  for(let fi=0; fi<nFlocks && sheep.length<SHEEP_CAP; fi++){
+    const anchor=_sheepTiles[hashStr(SEED+"sheepFlock"+fi)%_sheepTiles.length]; const [ax,ay]=anchor;
+    // meadow tiles within SHEEP_R of this anchor (Chebyshev) that are valid wild grass
+    const near=_sheepTiles.filter(([x,y])=>Math.abs(x-ax)<=SHEEP_R&&Math.abs(y-ay)<=SHEEP_R);
+    const size=3+(hashStr(SEED+"sheepSize"+fi)%3);   // 3..5 per flock
+    for(let j=0; j<size && sheep.length<SHEEP_CAP; j++){
+      const pool=near.length?near:[anchor]; const st=pool[hashStr(SEED+"sheepPos"+fi+"_"+j)%pool.length];
+      const lamb=lambs<3 && (hashStr(SEED+"sheepLamb"+fi+"_"+j)%4===0); if(lamb) lambs++;   // a couple of lambs (cap 3) for charm
+      sheep.push({kind:"sheep", ax, ay, cx:st[0], cy:st[1], tx:st[0], ty:st[1], px:st[0], py:st[1],
+        f:0, sp:0.00018+Math.random()*0.00012, standing:true, graze:1500+Math.random()*5000,
+        lamb, phase:Math.random()*6.28, depth:0}); } } }
+function sheepNeighbors(x,y,ax,ay){ const out=[]; for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const nx=x+ox,ny=y+oy;
+  if(sheepTileOK(nx,ny) && Math.abs(nx-ax)<=SHEEP_R && Math.abs(ny-ay)<=SHEEP_R) out.push([nx,ny]); } return out; }
+function updateSheep(dt){ if(!animate) return; ensureSheep();
+  for(const s of sheep){ if(s.standing){ s.px=s.cx; s.py=s.cy; s.graze-=dt;
+      if(s.graze<=0){ const ns=sheepNeighbors(s.cx,s.cy,s.ax,s.ay);   // occasionally amble 1 tile toward a nearby meadow tile
+        if(ns.length && Math.random()<0.55){ const n=ns[Math.floor(Math.random()*ns.length)]; s.tx=n[0]; s.ty=n[1]; s.standing=false; s.f=0; }
+        s.graze=2500+Math.random()*6000; } }
+    else { s.f+=s.sp*dt; if(s.f>=1){ s.f=0; s.cx=s.tx; s.cy=s.ty; s.px=s.cx; s.py=s.cy; s.standing=true; s.graze=2500+Math.random()*6000; }
+      else { s.px=s.cx+(s.tx-s.cx)*s.f; s.py=s.cy+(s.ty-s.cy)*s.f; } } } }
+
 // ============================ SHIPS (arrive on founding + ambient cargo) ============================
+// Ships travel ON WATER. We precompute a water ROUTE per world (cached by world._id):
+// BFS over 4-connected water tiles from the dock to the best ENTRY tile — the farthest
+// reachable EDGE-water tile (the river inlet/outlet); if no edge water is reachable
+// (enclosed lake), the farthest reachable water tile. The route is the BFS shortest path
+// dock->entry. Ships interpolate along this polyline by eased progress so total travel
+// time stays ~constant regardless of route length.
 let ships=[]; let ambientShipT=8000;
-function spawnShip(){ if(!world.dock) return; const dock=world.dock, o=world.origin;
-  const far={x:dock[0]+Math.sign(dock[0]-o[0]||1)*22, y:dock[1]+Math.sign(dock[1]-o[1]||1)*22};
-  ships.push({state:"arriving",prog:0,x:far.x,y:far.y,far,dock:{x:dock[0]+0.5,y:dock[1]+0.5},unloadT:0,cargo:0}); Audio.horn(); }
+let _shipRoute=null, _shipRouteId=-1;
+function ensureShipRoute(){ if(_shipRouteId===world._id) return _shipRoute; _shipRouteId=world._id; _shipRoute=null;
+  const dock=world.dock; if(!dock) return null; const isW=(x,y)=>inGrid(x,y)&&world.ground[y][x].t==="water";
+  const [dx0,dy0]=dock; if(!isW(dx0,dy0)) return null; const K=(x,y)=>x+","+y;
+  const prev=new Map(), dist=new Map(); prev.set(K(dx0,dy0),null); dist.set(K(dx0,dy0),0);
+  const q=[[dx0,dy0]]; let far=[dx0,dy0],farD=0, edge=null,edgeD=-1;
+  for(let h=0; h<q.length; h++){ const [x,y]=q[h], d=dist.get(K(x,y));
+    if(d>farD){farD=d;far=[x,y];}
+    if((x===0||y===0||x===GRID-1||y===GRID-1)&&d>edgeD){edgeD=d;edge=[x,y];}
+    for(const [ox,oy] of [[1,0],[-1,0],[0,1],[0,-1]]){ const nx=x+ox,ny=y+oy; if(!isW(nx,ny)) continue; const nk=K(nx,ny); if(prev.has(nk)) continue; prev.set(nk,K(x,y)); dist.set(nk,d+1); q.push([nx,ny]); } }
+  const entry=edge||far; const tiles=[]; for(let cur=K(entry[0],entry[1]); cur!=null; cur=prev.get(cur)){ const [px,py]=cur.split(",").map(Number); tiles.push([px,py]); }
+  tiles.reverse();   // dock -> entry
+  const pts=tiles.map(([x,y])=>({x:x+0.5,y:y+0.5}));   // waypoints in tile coords, +0.5 centre offset (docked-ship convention)
+  const seg=[]; let total=0; for(let i=1;i<pts.length;i++){ const l=Math.hypot(pts[i].x-pts[i-1].x,pts[i].y-pts[i-1].y); seg.push(l); total+=l; }
+  _shipRoute={ tiles, pts, seg, total, entry, entryIsEdge:!!edge, dock:[dx0,dy0] };
+  return _shipRoute; }
+// position along the dock->entry polyline at arc-length fraction t (0=dock, 1=entry)
+function routePos(rt,t){ const p=rt.pts; if(p.length<2) return {x:p[0].x,y:p[0].y};
+  let target=Math.max(0,Math.min(1,t))*rt.total;
+  for(let i=0;i<rt.seg.length;i++){ if(target<=rt.seg[i]||i===rt.seg.length-1){ const f=rt.seg[i]?target/rt.seg[i]:0; return {x:p[i].x+(p[i+1].x-p[i].x)*f, y:p[i].y+(p[i+1].y-p[i].y)*f}; } target-=rt.seg[i]; } }
+function spawnShip(){ const rt=ensureShipRoute(); if(!rt) return;   // no water route => no harbour narrative, skip
+  const s=routePos(rt,1);   // enter at the edge/entry tile
+  ships.push({state:"arriving",prog:0,x:s.x,y:s.y,dir:null,rid:world._id,dock:{x:rt.dock[0]+0.5,y:rt.dock[1]+0.5},unloadT:0,cargo:0}); Audio.horn(); }
 function updateShips(dt){ if(!animate){ ships.length=0; return; } const ease=p=>p*p*(3-2*p);
+  const rt=ensureShipRoute();
+  for(let i=ships.length-1;i>=0;i--) if(ships[i].rid!==world._id) ships.splice(i,1);   // world rebuilt => drop ships routed on the stale world (atmosphere)
+  if(!rt){ ships.length=0; return; }
   const rate=mode==="timelapse"? 3200/Math.max(1,tl.speed*0.35+0.65) : 6000;
+  const travel=rate*3.5;   // travel legs cruise much slower than dock/unload pacing (user: boats were too fast)
   if(mode==="live"){ ambientShipT-=dt; if(ambientShipT<=0){ spawnShip(); ambientShipT=22000+Math.random()*14000; } }
+  // forward heading (world-tile space): tangent along +t, times travel sign (departing=+1 toward entry, arriving=-1 toward dock)
+  const heading=(sh,t,sign)=>{ const a=routePos(rt,Math.max(0,t-0.03)), b=routePos(rt,Math.min(1,t+0.03));
+    let dx=(b.x-a.x)*sign, dy=(b.y-a.y)*sign; const m=Math.hypot(dx,dy); if(m>1e-4) sh.dir={x:dx/m,y:dy/m}; };
   for(let i=ships.length-1;i>=0;i--){ const sh=ships[i];
-    if(sh.state==="arriving"){ sh.prog+=dt/rate; const e=ease(Math.min(1,sh.prog)); sh.x=sh.far.x+(sh.dock.x-sh.far.x)*e; sh.y=sh.far.y+(sh.dock.y-sh.far.y)*e; if(sh.prog>=1){sh.state="docked";sh.unloadT=0;Audio.horn();} }
+    if(sh.state==="arriving"){ sh.prog+=dt/travel; const t=1-ease(Math.min(1,sh.prog)); const p=routePos(rt,t); sh.x=p.x; sh.y=p.y; heading(sh,t,-1); if(sh.prog>=1){sh.x=sh.dock.x;sh.y=sh.dock.y;sh.state="docked";sh.unloadT=0;Audio.horn();} }
     else if(sh.state==="docked"){ sh.unloadT+=dt; sh.cargo=Math.min(3,Math.floor(sh.unloadT/(rate*0.25))+1); if(sh.unloadT>rate*1.1){sh.state="departing";sh.prog=0;} }
-    else if(sh.state==="departing"){ sh.prog+=dt/rate; const e=ease(Math.min(1,sh.prog)); sh.x=sh.dock.x+(sh.far.x-sh.dock.x)*e; sh.y=sh.dock.y+(sh.far.y-sh.dock.y)*e; if(sh.prog>=1) ships.splice(i,1); } } }
+    else if(sh.state==="departing"){ sh.prog+=dt/travel; const t=ease(Math.min(1,sh.prog)); const p=routePos(rt,t); sh.x=p.x; sh.y=p.y; heading(sh,t,1); if(sh.prog>=1) ships.splice(i,1); } } }
 
 // ============================ FIREWORKS FX ============================
 let effects=[];
@@ -761,8 +858,6 @@ function paintBox(g,o,C,s,night){
 
 // ---- ground ----
 const GCOL=()=>({grass:pal.grass,grass2:pal.grass2,road:pal.road,water:pal.water,sand:pal.sand,stone:pal.stone});
-function chunkRevealed(x,y){ return world.revealed.has(((x/CHUNK)|0)+","+((y/CHUNK)|0)); }
-function revealFade(x,y){ const k=((x/CHUNK)|0)+","+((y/CHUNK)|0); const t0=chunkRevealAnim[k]; if(t0==null||t0===0) return 1; return Math.min(1,(now-t0)/(animate?1200:0.0001)); }
 const TILE_EDGES=top=>[[[0,-1],top[0],top[1]],[[1,0],top[1],top[2]],[[0,1],top[2],top[3]],[[-1,0],top[3],top[0]]];
 // visible tiered road surface (dirt→cobble→paved→avenue). Each road tile fills
 // fully; curbs draw only on edges bordering non-road, so adjacent tiles (incl.
@@ -783,12 +878,11 @@ function drawRoadTile(x,y,top,cx,cy,isStone){ const tier=isStone?3:(world.roadTi
 }
 function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
   const T=gridIso(x,y),R=gridIso(x+1,y),B=gridIso(x+1,y+1),L=gridIso(x,y+1); const top=[T,R,B,L].map(p=>projWorld(p.x,p.y-e));
-  if(!chunkRevealed(x,y)){ poly(ctx,top,"#12131f"); poly(ctx,top,"rgba(4,4,12,.4)"); return; }
   const cx=(top[0].x+top[2].x)/2, cy=(top[0].y+top[2].y)/2;
   if(e>0){ const Lg=projWorld(L.x,L.y),Bg=projWorld(B.x,B.y),Rg=projWorld(R.x,R.y); const f=Math.max(0.5,1-e*0.05);
-    // draw a cliff face only where it borders REVEALED ground — never into fog
-    if(chunkRevealed(x,y+1)) poly(ctx,[top[3],top[2],Bg,Lg],shade("#544230",f));
-    if(chunkRevealed(x+1,y)) poly(ctx,[top[2],top[1],Rg,Bg],shade("#3c2e20",f)); }
+    // cliff faces on the down-slope sides; guard the map edge so no face hangs off the last row/col
+    if(inGrid(x,y+1)) poly(ctx,[top[3],top[2],Bg,Lg],shade("#544230",f));
+    if(inGrid(x+1,y)) poly(ctx,[top[2],top[1],Rg,Bg],shade("#3c2e20",f)); }
   const isRoad=(c.t==="road"), isStone=(c.t==="stone");
   let color=col[c.t]||"#333";
   if(c.t==="grass"||c.t==="grass2"){ const lift=e>0?1+Math.min(0.28,e*0.02):1; color=shade(mix(col[c.t], c.v>0.5?col.grass:col.grass2,0.25),(0.9+c.v*0.22)*lift); }
@@ -800,7 +894,6 @@ function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
     for(const [d,pa,pb] of TILE_EDGES(top)){ const nx=x+d[0],ny=y+d[1]; if(inGrid(nx,ny)&&world.ground[ny][nx].t!=="water"){ ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); } } }
   else if((c.t==="grass"||c.t==="grass2")&&zoom>=3&&c.v>0.83){ ctx.fillStyle=shade(col[c.t],1.4); ctx.fillRect(cx-0.6*zoom,cy-1.2*zoom,1.2*zoom,1.6*zoom); }
   if(isRoad||isStone) drawRoadTile(x,y,top,cx,cy,isStone);
-  const f=revealFade(x,y); if(f<1) poly(ctx,top,"rgba(18,19,31,"+(1-f).toFixed(2)+")");
 }
 
 function drawRails(){ for(const r of world.rails){ const path=r.path; for(let i=1;i<path.length;i++){ const a=tileCenterIso(path[i-1][0],path[i-1][1]), b=tileCenterIso(path[i][0],path[i][1]); const sa=projWorld(a.x,a.y), sb=projWorld(b.x,b.y);
@@ -834,11 +927,29 @@ function drawCitizenSprite(g,x,y,z,c,moving){ const ph=moving?Math.sin(now*0.012
   g.fillStyle=c.coat; g.fillRect(x-1.3*z,topY,2.6*z,4.2*z); g.fillStyle=c.skin; g.fillRect(x-1*z,topY-2*z,2*z,2*z);
   if(c.hat){ g.fillStyle="#2a2620"; g.fillRect(x-1.3*z,topY-2.6*z,2.6*z,1*z); } }
 function drawPetSprite(g,x,y,z,dog){ const col=dog?"#8a6a44":"#7a7a80"; g.fillStyle="rgba(0,0,0,.22)"; g.beginPath(); g.ellipse(x,y,2*z,0.9*z,0,0,7); g.fill(); g.fillStyle=col; g.fillRect(x-2*z,y-2.4*z,3.2*z,1.6*z); g.fillRect(x+0.8*z,y-3.2*z,1.6*z,1.6*z); g.fillRect(x-1.6*z,y-1*z,0.7*z,1.2*z); g.fillRect(x+0.6*z,y-1*z,0.7*z,1.2*z); g.fillRect(x-2.7*z,y-3*z,0.8*z,dog?0.8*z:1.8*z); if(!dog){ g.fillRect(x+0.9*z,y-4*z,0.5*z,0.9*z); g.fillRect(x+1.9*z,y-4*z,0.5*z,0.9*z); } }
-function drawShipSprite(g,x,y,z,sh){ if(sh&&sh.state!=="docked"){ g.fillStyle="rgba(200,220,235,.22)"; for(let i=1;i<=4;i++) g.fillRect(x+i*2.4*z-1*z,y+i*1.4*z,2*z,1*z); }
+// tiny pixel sheep: fluffy white wool body, darker head+ears to one side, thin legs, ground shadow —
+// same rect/shadow idiom as the citizen/pet sprites. Lambs render smaller (sc). Grazing sheep do a
+// subtle 2-frame head-bob; walking sheep sway their legs. Static under reduced-motion (animate off).
+function drawSheepSprite(g,x,y,z,s){ const sc=s.lamb?0.66:1, moving=!s.standing;
+  const hb=(animate&&!moving)?((Math.floor(now*0.003+s.phase)&1)?0.5*z*sc:0):0;   // 2-frame graze head-bob
+  const sw=(animate&&moving)?Math.sin(now*0.011+s.phase)*0.5*z*sc:0;              // gentle leg sway while ambling
+  g.fillStyle="rgba(0,0,0,.22)"; g.beginPath(); g.ellipse(x,y,2.2*z*sc,0.85*z*sc,0,0,7); g.fill();
+  g.fillStyle="#3a352e"; g.fillRect(x-1.3*z*sc,y-1.3*z*sc+sw*0.4,0.55*z*sc,1.5*z*sc); g.fillRect(x+0.5*z*sc,y-1.3*z*sc-sw*0.4,0.55*z*sc,1.5*z*sc); // legs
+  const by=y-3.3*z*sc;                                                            // wool body (layered rects => woolly)
+  g.fillStyle="#f0efe8"; g.fillRect(x-1.8*z*sc,by,3.2*z*sc,2.2*z*sc);
+  g.fillStyle="#ffffff"; g.fillRect(x-1.5*z*sc,by-0.5*z*sc,2.6*z*sc,1*z*sc); g.fillRect(x-0.4*z*sc,by-0.9*z*sc,1.5*z*sc,0.9*z*sc);
+  g.fillStyle="#d8d6cc"; g.fillRect(x-1.8*z*sc,by+1.5*z*sc,3.2*z*sc,0.7*z*sc);    // under-shade
+  g.fillStyle="#4a443c"; g.fillRect(x+1.1*z*sc,by+0.5*z*sc+hb,1.35*z*sc,1.4*z*sc);// head (forward-right), bobs down grazing
+  g.fillStyle="#2f2a24"; g.fillRect(x+1.0*z*sc,by+0.4*z*sc+hb,0.5*z*sc,0.5*z*sc);  // ear
+  g.fillStyle="#151210"; g.fillRect(x+1.9*z*sc,by+1.0*z*sc+hb,0.35*z*sc,0.35*z*sc); } // eye
+function drawShipSprite(g,x,y,z,sh,wake){ if(sh&&sh.state!=="docked"){ const w=wake||{x:0.864,y:0.504}; g.fillStyle="rgba(200,220,235,.22)"; for(let i=1;i<=4;i++) g.fillRect(x+w.x*i*2.77*z-1*z,y+w.y*i*2.77*z,2*z,1*z); }
   g.fillStyle="#5a3a26"; poly(g,[{x:x-6*z,y:y-2*z},{x:x+6*z,y:y-2*z},{x:x+4*z,y:y+2.2*z},{x:x-4*z,y:y+2.2*z}],"#5a3a26");
   g.fillStyle="#3a2418"; g.fillRect(x-4*z,y+1*z,8*z,1.3*z); g.fillStyle="#8a6a44"; g.fillRect(x-4.5*z,y-3*z,9*z,1.4*z);
   g.fillStyle="#4a3320"; g.fillRect(x-0.5*z,y-12*z,1*z,10*z); g.fillStyle="#e8e0cc"; poly(g,[{x:x+0.7*z,y:y-12*z},{x:x+5.5*z,y:y-4.5*z},{x:x+0.7*z,y:y-4.5*z}]); g.fillStyle="#cfc6ac"; poly(g,[{x:x-0.7*z,y:y-10*z},{x:x-4*z,y:y-4.5*z},{x:x-0.7*z,y:y-4.5*z}]); }
-function drawShip(sh){ const c=tileCenterIso(sh.x,sh.y), s2=projWorld(c.x,c.y); drawShipSprite(ctx,s2.x,s2.y,zoom,sh); if(sh.state==="docked"){ for(let i=0;i<sh.cargo;i++){ const cc=tileCenterIso(sh.dock.x-0.5+i*0.4,sh.dock.y-0.5); const cs=projWorld(cc.x,cc.y); ctx.fillStyle="#9a7a4a"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,4*zoom); ctx.fillStyle="#7a5a34"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,1*zoom); } } }
+function drawShip(sh){ const c=tileCenterIso(sh.x,sh.y), s2=projWorld(c.x,c.y);
+  // wake trails BEHIND travel: project a point one step back along the heading into screen space
+  let wake=null; if(sh.dir&&(sh.dir.x||sh.dir.y)){ const cb=tileCenterIso(sh.x-sh.dir.x,sh.y-sh.dir.y), sb=projWorld(cb.x,cb.y); let wx=sb.x-s2.x,wy=sb.y-s2.y; const m=Math.hypot(wx,wy); if(m>1e-3) wake={x:wx/m,y:wy/m}; }
+  drawShipSprite(ctx,s2.x,s2.y,zoom,sh,wake); if(sh.state==="docked"){ for(let i=0;i<sh.cargo;i++){ const cc=tileCenterIso(sh.dock.x-0.5+i*0.4,sh.dock.y-0.5); const cs=projWorld(cc.x,cc.y); ctx.fillStyle="#9a7a4a"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,4*zoom); ctx.fillStyle="#7a5a34"; ctx.fillRect(cs.x-2*zoom,cs.y-4*zoom,4*zoom,1*zoom); } } }
 function drawSmoke(pt,seed,boost){ if(!animate) return; const spd=boost?0.0008:0.00035, n=boost?7:5;
   for(let i=0;i<n;i++){ const t=((now*spd)+i/n+seed*0.13)%1, a=(1-t)*(boost?0.62:0.5), wob=Math.sin(now*0.002+i)*3*zoom*t, sz=(1.5+t*3)*zoom; ctx.fillStyle="rgba(180,180,190,"+a.toFixed(3)+")"; ctx.fillRect(pt.x+wob-sz/2,pt.y-t*34*zoom,sz,sz); } }
 function drawBeacon(pt){ const pulse=animate?(0.4+0.6*Math.abs(Math.sin(now*0.005))):0.9; ctx.fillStyle="rgba(255,90,70,"+(pulse*0.4).toFixed(3)+")"; ctx.beginPath(); ctx.arc(pt.x,pt.y,6*zoom,0,7); ctx.fill(); ctx.fillStyle="rgba(255,110,80,"+pulse.toFixed(3)+")"; ctx.fillRect(pt.x-1.5*zoom,pt.y-1.5*zoom,3*zoom,3*zoom); }
@@ -848,20 +959,35 @@ function drawWeather(L){ if(!animate) return; const s=weatherState, inten=weathe
   if(s==="rain"){ ctx.strokeStyle="rgba(150,180,220,.4)"; ctx.lineWidth=1; const n=Math.floor(180*inten); for(let i=0;i<n;i++){ const x=((i*137+now*0.9)%(W+40))-20, y=((i*89+now*1.4)%(H+40))-20; ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(x-3,y+9); ctx.stroke(); } ctx.fillStyle="rgba(30,40,70,.12)"; ctx.fillRect(0,0,W,H); }
   else if(s==="snow"){ ctx.fillStyle="rgba(240,244,255,.85)"; const n=Math.floor(140*inten); for(let i=0;i<n;i++){ const x=((i*151+now*0.15+Math.sin(now*0.001+i)*20)%(W+20))-10, y=((i*97+now*0.35)%(H+20))-10; ctx.fillRect(x,y,1.6,1.6); } ctx.fillStyle="rgba(200,215,235,.08)"; ctx.fillRect(0,0,W,H); }
   else if(s==="fog"){ ctx.fillStyle="rgba(180,185,200,"+(0.12+0.14*inten)+")"; ctx.fillRect(0,0,W,H); for(let i=0;i<3;i++){ const y=(H*0.3)+i*H*0.22+Math.sin(now*0.0004+i)*20; const gr=ctx.createLinearGradient(0,y-40,0,y+40); gr.addColorStop(0,"rgba(200,205,220,0)"); gr.addColorStop(0.5,"rgba(200,205,220,"+(0.1*inten)+")"); gr.addColorStop(1,"rgba(200,205,220,0)"); ctx.fillStyle=gr; ctx.fillRect(0,y-40,W,80); } } }
-function drawEffects(){ for(let i=effects.length-1;i>=0;i--){ const e=effects[i]; const age=now-e.t; if(!animate||(e.type==="sparkle"?age>900:age>2600)){ effects.splice(i,1); continue; }
+function drawEffects(){ for(let i=effects.length-1;i>=0;i--){ const e=effects[i]; const age=now-e.t; const life=e.type==="sparkle"?900:e.type==="miniburst"?1200:2600; if(!animate||age>life){ effects.splice(i,1); continue; }
     if(e.type==="fireworks"){ const c=tileCenterIso(e.x,e.y), s2=projWorld(c.x,c.y-30); for(let b=0;b<3;b++){ const bt=age-b*500; if(bt<0||bt>1400) continue; const p=bt/1400; const cols=["#ffcf7a","#7fe3e0","#ff6a5a","#7fe3a0"]; ctx.fillStyle=cols[b%4]; for(let k=0;k<16;k++){ const a=k/16*6.28, r=p*40*zoom; ctx.globalAlpha=(1-p); ctx.fillRect(s2.x+Math.cos(a)*r-1,s2.y+Math.sin(a)*r-1+b*8,2,2); } ctx.globalAlpha=1; } }
+    else if(e.type==="miniburst"){ const o=world.lots.find(l=>l.id===e.id); if(!o||!o._roofTop) continue; const p=age/1200, top=o._roofTop, col=e.col||"#cfe0ff"; const bx=top.x, by=top.y-14*zoom; ctx.fillStyle=col; for(let k=0;k<10;k++){ const a=k/10*6.28, r=p*16*zoom; ctx.globalAlpha=(1-p)*0.9; ctx.fillRect(bx+Math.cos(a)*r-0.9*zoom,by+Math.sin(a)*r-0.9*zoom,1.8*zoom,1.8*zoom); } ctx.globalAlpha=1; }
     else if(e.type==="sparkle"){ const o=world.lots.find(l=>l.id===e.id); if(!o||!o._roofTop) continue; const p=age/900, top=o._roofTop; ctx.globalAlpha=1-p;
       for(let k=0;k<6;k++){ const a=k/6*6.28, r=(4+p*10)*zoom; ctx.fillStyle=k%2?"#ffe9a8":"#bff0f4"; ctx.fillRect(top.x+Math.cos(a)*r-0.8*zoom,top.y-6*zoom+Math.sin(a)*r-0.8*zoom,1.6*zoom,1.6*zoom); } ctx.globalAlpha=1; } } }
-// live-presence: birds circling active roofs, minions scurrying in on fork.start
-function drawBird(x,y,z,flapUp,perched){ ctx.strokeStyle="#1e1e28"; ctx.lineWidth=Math.max(1,z*0.5);
-  if(perched){ ctx.fillStyle="#1e1e28"; ctx.fillRect(x-1*z,y-1.2*z,2*z,1.2*z); ctx.fillRect(x-0.4*z,y-2.2*z,0.9*z,1.1*z); return; }
-  const w=flapUp?1.1:-0.3; ctx.beginPath(); ctx.moveTo(x-2.4*z,y-w*z); ctx.lineTo(x,y); ctx.lineTo(x+2.4*z,y-w*z); ctx.stroke(); }
-function drawPresence(){ if(REDUCE) return; let budget=10;
-  for(const o of world.lots){ const r=activity[o.id]; if(!r||now-r.last>60000||!o._roofTop) continue; const top=o._roofTop;
-    const n=Math.min(4,1+Math.floor(r.hits.length/2));
-    for(let i=0;i<n&&budget>0;i++){ budget--;
-      if(r.waiting){ drawBird(top.x+(i-(n-1)/2)*3.2*zoom, top.y-1*zoom, zoom, false, true); }
-      else { const a=now*0.004+i*(6.28/n); drawBird(top.x+Math.cos(a)*7*zoom, top.y-9*zoom+Math.sin(a)*3*zoom, zoom, (((now*0.02+i)|0)&1)===0, false); } } }
+// live-presence: sky beams rising from active roofs (color = work type), minions scurrying in on fork.start
+// beam color table — most-recent activity's tool/kind maps to a hue
+function beamColorFor(a){ const k=(a&&a.kind)||"", t=(a&&a.tool)||"";
+  if(k==="waiting.human"||k==="waiting.permission") return "#e6e6ec";           // pale mono (waiting)
+  if(t==="Edit"||t==="Write"||t==="NotebookEdit") return "#ffd27a";             // warm gold
+  if(t==="Bash") return "#ff9a4a";                                              // orange
+  if(t==="Read"||t==="Grep"||t==="Glob") return "#7fd8e8";                      // cyan
+  if(t==="WebSearch"||t==="WebFetch") return "#c9a6ff";                         // violet
+  if(t==="Task"||k.indexOf("fork")===0) return "#8fe3a0";                       // green
+  if(t) return "#cfe0ff";                                                       // any other tool → soft white-blue
+  return null; }                                                                // no tool / no signal (turn.*, session.*) → keep existing beam color
+// draw one vertical light beam per active repo, straight up in screen space from the rooftop
+function drawBeams(){ for(const id of Object.keys(beams)){ const b=beams[id]; const sinceLast=now-b.last;
+    let env=1; if(sinceLast>60000){ env=1-(sinceLast-60000)/2000; if(env<=0){ delete beams[id]; continue; } }
+    const o=world.lots.find(l=>l.id===id); if(!o||!o._roofTop) continue; const top=o._roofTop;
+    const fin=Math.min(1,(now-b.appear)/300);                                    // 300ms fade-in
+    const ct=Math.min(1,(now-b.colT0)/500), col=mix(b.colFrom,b.colTo,ct);       // 500ms color lerp
+    let mod=1; if(animate){ mod=b.mode==="waiting" ? 0.55+0.45*Math.abs(Math.sin(now*Math.PI/1000)) /*~1s blink*/
+                                                   : 0.72+0.28*Math.sin(now*Math.PI/1000); }            /*~2s pulse*/
+    const alpha=Math.max(0,Math.min(1,env*fin*mod))*0.5; if(alpha<=0.002) continue;
+    const w=Math.max(3,zoom*1.6); const grd=ctx.createLinearGradient(0,top.y,0,0);
+    grd.addColorStop(0,rgba(col,alpha)); grd.addColorStop(0.6,rgba(col,alpha*0.45)); grd.addColorStop(1,rgba(col,0));
+    ctx.fillStyle=grd; ctx.fillRect(top.x-w/2,0,w,top.y); } }
+function drawPresence(){ if(REDUCE) return;
   for(let i=minions.length-1;i>=0;i--){ const m=minions[i], o=world.lots.find(l=>l.id===m.id), p=(now-m.t)/1200; if(p>=1||!o){ minions.splice(i,1); continue; }
     const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y), fromx=sc.x-18*zoom, fromy=sc.y+10*zoom;
     const mx=fromx+(sc.x-fromx)*p, my=fromy+(sc.y-fromy)*p; ctx.globalAlpha=1-p*p;
@@ -903,21 +1029,28 @@ function render(){
   drawRails();
   for(const o of world.stakes) drawStake(o);
   const smokes=[],beacons=[]; let lighthouseTop=null; let count=0;
-  for(const o of world.objs){ const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y); if(sc.x<-160||sc.x>W+160||sc.y<-300||sc.y>H+160){ o._smoke=o._beacon=o._roofTop=null; continue; }
-    if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.night); count++;
-      if(o._smoke){ const r=activity[o.id]; smokes.push([o._smoke,o.seed,(r&&now-r.smokeBoost<1500)?1:0]); } if(o._beacon) beacons.push(o._beacon); }
-    else { drawProp(o); if(o._lighthouse) lighthouseTop=o._lighthouse; } }
+  // Merge citizens into the buildings/props depth pass so a citizen behind a tower is
+  // occluded by it and one in front paints over it (both keyed on the same tile depth).
+  const drawList=world.objs.slice(); for(const c of citizens){ c.depth=depthOf(c.px,c.py); drawList.push(c); }
+  ensureSheep(); for(const s of sheep){ s.depth=depthOf(s.px,s.py); drawList.push(s); }   // graze in the same depth pass => correct occlusion
+  drawList.sort((a,b)=>(a.depth+((a.h||0)*0.001))-(b.depth+((b.h||0)*0.001)));
+  for(const o of drawList){
+    if(o.kind==="building"||o.kind==="prop"){ const c=tileCenterIso(o.tx,o.ty), sc=projWorld(c.x,c.y); if(sc.x<-160||sc.x>W+160||sc.y<-300||sc.y>H+160){ o._smoke=o._beacon=o._roofTop=null; continue; }
+      if(o.kind==="building"){ o._smoke=null;o._beacon=null; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); paintBox(ctx,o,C,zoom,L.night); count++;
+        if(o._smoke){ const r=activity[o.id]; smokes.push([o._smoke,o.seed,(r&&now-r.smokeBoost<1500)?1:0]); } if(o._beacon) beacons.push(o._beacon); }
+      else { drawProp(o); if(o._lighthouse) lighthouseTop=o._lighthouse; } }
+    else if(o.kind==="sheep"){ const cc=tileCenterIso(o.px,o.py), s2=projWorld(cc.x,cc.y); if(s2.x<-80||s2.x>W+80||s2.y<-120||s2.y>H+140) continue; drawSheepSprite(ctx,s2.x,s2.y,zoom,o); }
+    else { const cc=tileCenterIso(o.px,o.py), s2=projWorld(cc.x,cc.y);   // citizen (+ its trailing pet)
+      if(o.standing){ const glow=animate?(0.5+0.12*Math.sin(now*0.005)):0.6; const rg=ctx.createRadialGradient(s2.x,s2.y-10*zoom,1,s2.x,s2.y-10*zoom,14*zoom); rg.addColorStop(0,"rgba(255,222,140,"+(0.4*glow)+")"); rg.addColorStop(1,"rgba(255,222,140,0)"); ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(s2.x,s2.y-10*zoom,14*zoom,0,7); ctx.fill(); ctx.fillStyle="#2a2620"; ctx.fillRect(s2.x+4*zoom-0.7*zoom,s2.y-13*zoom,1.4*zoom,13*zoom); ctx.fillStyle="rgba(255,236,172,"+glow+")"; ctx.fillRect(s2.x+4*zoom-1*zoom,s2.y-14.6*zoom,2*zoom,2*zoom); }
+      if(o.pet&&o.hist.length>=16){ const hp=o.hist[o.hist.length-16]; const pc=tileCenterIso(hp.x,hp.y), ps=projWorld(pc.x,pc.y); drawPetSprite(ctx,ps.x,ps.y,zoom,o.pet==="dog"); }
+      drawCitizenSprite(ctx,s2.x,s2.y,zoom,o,!o.standing); } }
   drawPresence();
   lastBuildingCount=count;
   for(const sh of ships) drawShip(sh);
-  const list=citizens.slice().sort((a,b)=>(a.px+a.py)-(b.px+b.py));
-  for(const c of list){ const cc=tileCenterIso(c.px,c.py), s2=projWorld(cc.x,cc.y);
-    if(c.standing){ const glow=animate?(0.5+0.12*Math.sin(now*0.005)):0.6; const rg=ctx.createRadialGradient(s2.x,s2.y-10*zoom,1,s2.x,s2.y-10*zoom,14*zoom); rg.addColorStop(0,"rgba(255,222,140,"+(0.4*glow)+")"); rg.addColorStop(1,"rgba(255,222,140,0)"); ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(s2.x,s2.y-10*zoom,14*zoom,0,7); ctx.fill(); ctx.fillStyle="#2a2620"; ctx.fillRect(s2.x+4*zoom-0.7*zoom,s2.y-13*zoom,1.4*zoom,13*zoom); ctx.fillStyle="rgba(255,236,172,"+glow+")"; ctx.fillRect(s2.x+4*zoom-1*zoom,s2.y-14.6*zoom,2*zoom,2*zoom); }
-    if(c.pet&&c.hist.length>=16){ const hp=c.hist[c.hist.length-16]; const pc=tileCenterIso(hp.x,hp.y), ps=projWorld(pc.x,pc.y); drawPetSprite(ctx,ps.x,ps.y,zoom,c.pet==="dog"); }
-    drawCitizenSprite(ctx,s2.x,s2.y,zoom,c,!c.standing); }
   for(const [pt,sd] of smokes) drawSmoke(pt,sd);
   for(const pt of beacons) drawBeacon(pt);
   if(lighthouseTop) drawLighthouseBeam(lighthouseTop);
+  drawBeams();
   drawEffects();
   if(L.light<0.98){ ctx.fillStyle="rgba(26,32,72,"+((1-L.light)*0.40).toFixed(3)+")"; ctx.fillRect(0,0,W,H); }  // atmospheric, never pure black
   if(L.warm>0){ ctx.fillStyle="rgba(255,150,70,"+(L.warm*0.16).toFixed(3)+")"; ctx.fillRect(0,0,W,H); }
@@ -929,7 +1062,7 @@ function render(){
 // ============================ MINIMAP ============================
 const MMCELL=150/GRID;
 function drawMinimap(){ mmx.setTransform(1,0,0,1,0,0); mmx.imageSmoothingEnabled=false; mmx.clearRect(0,0,150,150); const col=GCOL();
-  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ mmx.fillStyle= chunkRevealed(x,y)? (col[world.ground[y][x].t]||"#222") : "#12131f"; mmx.fillRect(x*MMCELL,y*MMCELL,MMCELL+0.6,MMCELL+0.6); }
+  for(let y=0;y<GRID;y++)for(let x=0;x<GRID;x++){ mmx.fillStyle= col[world.ground[y][x].t]||"#222"; mmx.fillRect(x*MMCELL,y*MMCELL,MMCELL+0.6,MMCELL+0.6); }
   for(const o of world.lots){ mmx.fillStyle=shade(o.info.base,1.4); mmx.fillRect(o.tx*MMCELL,o.ty*MMCELL,MMCELL*1.6,MMCELL*1.6); }
   for(const sh of ships){ mmx.fillStyle="#e8e0cc"; mmx.fillRect(sh.x*MMCELL-1,sh.y*MMCELL-1,2.5,2.5); }
   const cs=[[0,0],[W,0],[W,H],[0,H]].map(([sx,sy])=>{ const t=screenToTile(sx,sy); return [t.tx*MMCELL,t.ty*MMCELL]; });
@@ -1063,7 +1196,7 @@ function deltaMsg(d){ switch(d.kind){
   case "road.add":      return "road laid";
   case "road.upgrade":  return "road upgraded → tier "+d.tier;
   case "rail.add":      return "rail line built";
-  case "chunk.reveal":  return "chunk revealed ("+d.x+","+d.y+")";
+  case "chunk.reveal":  return "district surveyed ("+d.x+","+d.y+")";
   case "landmark.add":  return "milestone: "+(d.landmarkKind||"landmark");
   case "ship.arrive":   return "ship arrived";
   default:              return null;   // population.set / sync.lots → not log-worthy
@@ -1090,6 +1223,8 @@ function backfillLog(){ for(const d of DELTAS) logDelta(d); }
 
 // ============================ LIVE SSE + PRESENCE (http only; atmosphere-only) ============================
 const activity=Object.create(null);   // lotId -> {last, hits[], waiting, smokeBoost}
+const beams=Object.create(null);       // lotId -> {last, appear, mode:"work"|"waiting", colFrom, colTo, colT0} — sky-beam state
+const BEAM_CAP=8;                       // hard cap on simultaneous beams (oldest-activity dropped first)
 let minions=[];
 function setLive(state){ const d=$("livedot"); if(!d) return; d.classList.toggle("on",state==="connected"); d.title="live feed: "+state; }
 // splice a CityDelta into the live log (sorted) and, if following live view, re-fold + replay its fx
@@ -1102,9 +1237,18 @@ function applyLiveDelta(d){ if(!d||typeof d.kind!=="string"||typeof d.day!=="num
 function onActivity(a){ if(REDUCE||!a||!a.repo) return; const o=world.lots.find(l=>l.repo===a.repo||l.id==="L-"+a.repo); if(!o) return;
   const r=activity[o.id]||(activity[o.id]={last:0,hits:[],waiting:false,smokeBoost:0});
   r.last=now; r.hits.push(now); r.hits=r.hits.filter(t=>now-t<60000); r.waiting=(a.kind==="waiting.human");
+  // sky-beam state: waiting.* → mono "waiting" mode until the next non-waiting activity; else "work" mode colored by tool
+  const waiting=(a.kind==="waiting.human"||a.kind==="waiting.permission");
+  let b=beams[o.id]; const rawCol=beamColorFor(a);                              // null when the msg carries no color signal (turn.*/session.*)
+  const targetCol=rawCol||(b&&b.colTo)||"#cfe0ff";
+  if(!b){ b=beams[o.id]={last:now,appear:now,mode:waiting?"waiting":"work",colFrom:targetCol,colTo:targetCol,colT0:now}; }
+  b.last=now; b.mode=waiting?"waiting":"work";   // any non-waiting activity clears the mono waiting beam
+  if(rawCol&&b.colTo!==targetCol){ const cur=mix(b.colFrom,b.colTo,Math.min(1,(now-b.colT0)/500)); b.colFrom=cur; b.colTo=targetCol; b.colT0=now; }   // 500ms smooth lerp on type change
+  // hard-cap simultaneous beams (drop oldest-activity)
+  const ids=Object.keys(beams); if(ids.length>BEAM_CAP){ let ok=null; for(const id of ids){ if(id===o.id) continue; if(!ok||beams[id].last<beams[ok].last) ok=id; } if(ok) delete beams[ok]; }
   if(a.kind==="tool.pre"&&a.tool==="Bash"){ if(o._chimney) r.smokeBoost=now; }
   else if(a.kind==="tool.pre"&&(a.tool==="Edit"||a.tool==="Write")) o._flickerUntil=now+800;
-  else if(a.kind==="turn.end"){ effects.push({type:"sparkle",t:now,id:o.id}); if(Audio.on) Audio.ding(); }
+  else if(a.kind==="turn.end"){ effects.push({type:"miniburst",t:now,id:o.id,col:(b?b.colTo:targetCol)}); if(Audio.on) Audio.ding(); }   // small per-turn celebration in beam color
   else if(a.kind==="fork.start"&&minions.length<8) minions.push({id:o.id,t:now}); }
 function handleSSE(payload){ let obj; try{ obj=JSON.parse(payload); }catch(_){ return; } if(!obj||typeof obj!=="object") return;
   if(obj.type==="activity"){ logActivity(obj); onActivity(obj); } else if(typeof obj.kind==="string") applyLiveDelta(obj); /* unknown message types ignored */ }
@@ -1125,7 +1269,7 @@ function loop(t){ const dt=Math.min(80,t-(lastT||t)); lastT=t; now=t;
   computeWeather();
   if(animate){ tickTimelapse(dt); for(const l of world.lots) if(l.constructing>0) l.constructing=Math.max(0,l.constructing-dt);
     if(mode==="live"){ fireworksT-=dt; if(fireworksT<=0 && world.fireworksSpots.length){ launchFireworks(world.fireworksSpots[0]); fireworksT=16000+Math.random()*10000; } }
-    updateCitizens(dt); updateShips(dt); render(); refreshHUD(); }
+    updateCitizens(dt); updateSheep(dt); updateShips(dt); render(); refreshHUD(); }
   else if(dirty){ render(); refreshHUD(); dirty=false; }
   requestAnimationFrame(loop);
 }
@@ -1168,14 +1312,24 @@ if(SELFTEST){
     // VALUES, not serialization order (mirrors test/deltas-replay.test.ts).
     const CANON=(v)=>{ if(Array.isArray(v)) return v.map(CANON); if(v&&typeof v==="object"){const o={};for(const k of Object.keys(v).sort())o[k]=CANON(v[k]);return o;} return v; };
     const sameCity=(a,b)=>{ const n=(m)=>{ const c=CANON(m); c.lots=(c.lots||[]).slice().sort((x,y)=>x.id<y.id?-1:x.id>y.id?1:0); c.chunks=(c.chunks||[]).slice().sort((x,y)=>(x.x-y.x)||(x.y-y.y)); return JSON.stringify(c); }; return n(a)===n(b); };
-    // 1) replay determinism: fold(deltas,MAX) deep-equals provided model
+    // 1) replay determinism: fold(deltas,MAX) deep-equals provided model.
+    // Full-reveal contract: fold rebuilds the ENTIRE grid as revealed from day 0
+    // (chunk.reveal deltas are surveyed-flavor now, not map existence), so this
+    // matches a fully-revealed engine model where all GRIDCH*GRIDCH chunks exist.
     const refold=fold(DELTAS,MAX_DAY);
     res.checks.foldEqualsModel = sameCity(refold,MODEL);
+    const CHTOT=GRIDCH*GRIDCH;
+    const allRevealed=(m)=>m.chunks.length===CHTOT && m.chunks.every(c=>c.revealed&&c.revealedDay===0);
+    res.checks.modelChunks=MODEL.chunks.length; res.checks.foldChunks=refold.chunks.length;
+    res.checks.fullRevealModel=allRevealed(MODEL);   // served model: geography visible from day 0
+    res.checks.fullRevealFold=allRevealed(refold);   // fold rebuilds the same full grid
     // 2) live render paints all lots
     setMode("live"); render(); res.checks.liveBuildings=lastBuildingCount; res.checks.modelLots=MODEL.lots.length;
     res.checks.livePaintsAll = lastBuildingCount===MODEL.lots.length;
-    // 3) timelapse day 0 then day 90 => same building count + same stats as live
+    // 3) timelapse day 0 shows the FULL geography (all chunks revealed) though no
+    //    buildings yet; day 90 => same building count + same stats as live
     setMode("timelapse"); setDay(0,false); render(); res.checks.day0Buildings=lastBuildingCount;
+    res.checks.day0Chunks=world.revealed.size; res.checks.day0FullGeography=world.revealed.size===CHTOT;
     setDay(MAX_DAY,false); render(); res.checks.day90Buildings=lastBuildingCount;
     res.checks.timelapseEndMatchesLive = lastBuildingCount===MODEL.lots.length && sameCity(M,MODEL);
     // 4) reduced-motion path: animate off => still renders w/o throwing
@@ -1187,12 +1341,21 @@ if(SELFTEST){
     setOrient(0); fitCity(); res.checks.rotationPaintsAll=rotOK;
     // 6) NO unknown-sprite fallbacks were drawn across any render above
     res.checks.unknownSprites=unknownSprites; res.checks.noUnknownSprites=(unknownSprites===0);
-    // 7) live-presence: injecting synthetic activity + junk SSE messages must not error
+    // 7) live-presence SKY BEAMS: inject a real activity sequence for a real lot, render frames,
+    //    assert no throw AND the beam-state map holds the expected color/mode at each step.
     const rep=(MODEL.lots[0]&&MODEL.lots[0].repo)||"x";
-    ["tool.pre|Bash","tool.pre|Edit","tool.pre|Write","turn.end|","fork.start|","waiting.human|","session.start|"]
+    const beamLot=(world.lots.find(l=>l.repo===rep||l.id==="L-"+rep)||{}).id;
+    now=1000; handleSSE(JSON.stringify({type:"activity",repo:rep,kind:"tool.pre",tool:"Edit"})); render();
+    const bEdit=beamLot&&beams[beamLot]; res.checks.beamWorkGold=!!bEdit && bEdit.mode==="work" && bEdit.colTo==="#ffd27a";  // Edit → warm gold work beam
+    now=2000; handleSSE(JSON.stringify({type:"activity",repo:rep,kind:"waiting.human"})); render();
+    const bWait=beamLot&&beams[beamLot]; res.checks.beamWaitMono=!!bWait && bWait.mode==="waiting" && bWait.colTo==="#e6e6ec";  // waiting.human → mono beam
+    now=3000; handleSSE(JSON.stringify({type:"activity",repo:rep,kind:"turn.end"})); render();
+    res.checks.beamTurnEndBurst=effects.some(e=>e.type==="miniburst") && (beams[beamLot]?beams[beamLot].mode==="work":false);  // turn.end → mini firework, clears waiting
+    // other kinds + junk / unknown SSE messages must not throw
+    ["tool.pre|Bash","tool.pre|Read","tool.pre|WebFetch","fork.start|","session.start|"]
       .forEach(s=>{ const p=s.split("|"); handleSSE(JSON.stringify({type:"activity",repo:rep,kind:p[0],tool:p[1]||undefined})); });
     handleSSE('{"type":"totally-unknown-message"}'); handleSSE('not-json-at-all'); handleSSE(':heartbeat'); handleSSE('{"kind":123}');
-    render(); res.checks.activityInjectClean=true;
+    render(); res.checks.activityInjectClean = res.checks.beamWorkGold && res.checks.beamWaitMono && res.checks.beamTurnEndBurst;
     // 8) INFORMATION LOG: backfill produced rows; injected activity + a live delta both append
     const logStart=$("logFeed").children.length;
     res.checks.logBackfill = logStart>0;
@@ -1210,10 +1373,49 @@ if(SELFTEST){
     // 10) BRIGHTNESS modes all render cleanly
     ["auto","day","dusk","brightnight"].forEach(b=>{ setBright(b); render(); }); setBright("auto");
     res.checks.brightnessModes=true;
+    // 11) composed color helpers stay valid (shade(mix()) once NaN'd grass to black)
+    res.checks.grassColorLive = shade(mix(pal.grass,pal.grass2,0.25),1)!=="rgb(0,0,0)"
+      && mix(mix("#102030","#405060",0.5),"#d98a5a",0.3)!=="rgb(0,0,0)";
+    // 12) citizens & pets only ever occupy walkable road tiles — never rooftops/water/props
+    setMode("live"); render(); ensureWalk();
+    res.checks.citizenCount=citizens.length;
+    res.checks.citizensOnRoads = citizens.every(c=>walkable(c.cx,c.cy)&&walkable(c.tx,c.ty));
+    // 12b) sheep graze on WILD grass only — current tile is grass/grass2, never road/water/sand/stone
+    //      or a lot tile; flock population sits within [1,12] (the map has plenty of countryside).
+    ensureSheep(); res.checks.sheepCount=sheep.length;
+    { const lotset=new Set(world.lots.map(l=>l.tx+","+l.ty));
+      const wildGrass=(x,y)=>{ const t=inGrid(x,y)&&world.ground[y][x].t; return (t==="grass"||t==="grass2")&&!lotset.has(x+","+y); };
+      res.checks.sheepOnGrass = sheep.length>=1 && sheep.length<=12 && sheep.every(s=>wildGrass(s.cx,s.cy)&&wildGrass(s.tx,s.ty)); }
+    // 13) ships travel ON WATER: cached route is all water, starts at the dock, ends at
+    //     edge-water when edge water is reachable; a simulated ship stays on water across ticks.
+    setMode("live"); render(); const rt=ensureShipRoute();
+    res.checks.shipRouteLen = rt? rt.tiles.length : 0;
+    let shipsOK=true;
+    if(rt){ const isW=(x,y)=>inGrid(x,y)&&world.ground[y][x].t==="water";
+      const allW=rt.tiles.every(([x,y])=>isW(x,y));
+      const [d0x,d0y]=world.dock, [s0x,s0y]=rt.tiles[0]; const startsAtDock=(Math.abs(s0x-d0x)+Math.abs(s0y-d0y))<=1;
+      const last=rt.tiles[rt.tiles.length-1]; const lastEdge=(last[0]===0||last[1]===0||last[0]===GRID-1||last[1]===GRID-1);
+      let anyEdgeWater=false; for(let y=0;y<GRID&&!anyEdgeWater;y++)for(let x=0;x<GRID;x++){ if(isW(x,y)&&(x===0||y===0||x===GRID-1||y===GRID-1)){ anyEdgeWater=true; break; } }
+      const endEdgeOK = rt.entryIsEdge ? lastEdge : true;   // when edge water is reachable, the last waypoint must be edge-water
+      // simulate a spawned ship through several update ticks; its rounded tile must always be water
+      const savedA=animate; animate=true; ships.length=0; spawnShip(); let simOnWater=ships.length>0;
+      for(let k=0;k<50;k++){ updateShips(80); for(const sh of ships){ const rx=Math.round(sh.x-0.5), ry=Math.round(sh.y-0.5); if(!isW(rx,ry)) simOnWater=false; } }
+      ships.length=0; animate=savedA;
+      res.checks.shipRouteAllWater=allW; res.checks.shipRouteStartsAtDock=startsAtDock; res.checks.shipRouteEndEdge=lastEdge; res.checks.shipMapHasEdgeWater=anyEdgeWater; res.checks.shipSimOnWater=simOnWater;
+      shipsOK = allW && startsAtDock && endEdgeOK && simOnWater;
+    }
+    res.checks.shipsOnWater = shipsOK;
     res.errors=errors.slice();
-    res.ok = res.checks.foldEqualsModel && res.checks.livePaintsAll && res.checks.timelapseEndMatchesLive
+    res.ok = res.checks.foldEqualsModel && res.checks.fullRevealModel && res.checks.fullRevealFold
+      && res.checks.grassColorLive
+      && res.checks.day0FullGeography
+      && res.checks.livePaintsAll && res.checks.timelapseEndMatchesLive
       && res.checks.reducedMotionClean && res.checks.rotationPaintsAll && res.checks.noUnknownSprites
       && res.checks.logBackfill && res.checks.logGrew && res.checks.drawersToggle && res.checks.brightnessModes
+      && res.checks.citizensOnRoads
+      && res.checks.sheepOnGrass
+      && res.checks.shipsOnWater
+      && res.checks.activityInjectClean
       && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);
