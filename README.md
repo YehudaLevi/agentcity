@@ -6,6 +6,10 @@ A persistent pixel-art city that grows out of your AI-coding-agent activity — 
 
 It's not a dashboard. It's a place.
 
+![90 days of work growing into a city — demo data](media/city-growth.gif)
+
+*90 days of (demo) work, replayed as the Founding Timelapse: first huts, streets, districts, towers — and a hover card for any building.*
+
 ![agentcity — a river city at day](media/city-day.png)
 
 ## What you're looking at

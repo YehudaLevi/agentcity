@@ -1298,6 +1298,11 @@ setMode("live");
 // CAMERA SANITY (item 3): always fit-all to the BUILT city on load — never open
 // on empty fog — even when a ?rot/?day deep-link is present.
 fitCity();
+// ?tip=<repo> — pin that building's tooltip open (demo captures / share shots).
+// After fitCity so the projection is final.
+(function pinTip(){ const q=new URLSearchParams(location.search); const name=q.get("tip"); if(!name) return;
+  const o=world.lots.find(l=>l.repo===name); if(!o) return; render();
+  const c=tileCenterIso(o.tx,o.ty), s2=projWorld(c.x,c.y); showTip(o,s2.x,s2.y-TIER_H[o.tier]*zoom*0.5); })();
 initSSE();   // live feed when served over http(s); no-op on file://
 requestAnimationFrame(loop);
 if(REDUCE){ ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListener(ev,()=>{dirty=true;})); }
