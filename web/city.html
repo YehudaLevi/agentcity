@@ -931,7 +931,7 @@ function drawTile(x,y){ const c=world.ground[y][x], e=c.elev, col=GCOL();
   if(c.t==="grass"||c.t==="grass2"){ const lift=e>0?1+Math.min(0.28,e*0.02):1; color=shade(mix(col[c.t], c.v>0.5?col.grass:col.grass2,0.25),(0.9+c.v*0.22)*lift); }
   else if(c.t==="sand"){ color=shade(col.sand,0.92+c.v*0.16); }
   poly(ctx,top,color);
-  if(c.t==="water"){ const ph=animate?Math.sin((x*1.7+y*2.3)+now*0.0015):(c.v-0.5);
+  if(c.t==="water"){ const ph=animate?Math.sin((x*1.7+y*2.3)+now*0.0004):(c.v-0.5);
     poly(ctx,top, ph>0.3?shade(col.water,1.18):shade(col.water,0.9));
     ctx.strokeStyle="rgba(200,226,236,.5)"; ctx.lineWidth=Math.max(1,zoom*0.45);
     for(const [d,pa,pb] of TILE_EDGES(top)){ const nx=x+d[0],ny=y+d[1]; if(inGrid(nx,ny)&&world.ground[ny][nx].t!=="water"){ ctx.beginPath(); ctx.moveTo(pa.x,pa.y); ctx.lineTo(pb.x,pb.y); ctx.stroke(); } } }
@@ -1154,16 +1154,36 @@ function cityTiles(){ const pts=[]; for(const o of world.lots) pts.push([o.tx,o.
   if(M.baseline&&M.baseline.housePos) pts.push(M.baseline.housePos);
   if(!pts.length) pts.push([world.origin?world.origin[0]:GRID/2, world.origin?world.origin[1]:GRID/2]);
   return pts; }
-function fitCity(){ const pts=cityTiles(); let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
+// Framing computation only (no camera mutation) so it can be reused by the share
+// hero-shot without moving the live view. Returns {zi,zoom,camIx,camIy} (pre-clamp).
+function fitCityFraming(){ const pts=cityTiles(); let minx=1e9,maxx=-1e9,miny=1e9,maxy=-1e9;
   for(const [tx,ty] of pts){ const c=tileCenterIso(tx,ty); if(c.x<minx)minx=c.x; if(c.x>maxx)maxx=c.x; if(c.y<miny)miny=c.y; if(c.y>maxy)maxy=c.y; }
   const padX=70, padTop=110, padBot=60;                          // padTop leaves room for tall towers
   const bw=(maxx-minx)+padX*2, bh=(maxy-miny)+padTop+padBot;
   const vw=W||1200, vh=(H||800)-46;                              // usable height under the top bar
   let bi=0; for(let i=ZOOMS.length-1;i>=0;i--){ if(bw*ZOOMS[i]<=vw && bh*ZOOMS[i]<=vh){ bi=i; break; } }
-  zi=bi; zoom=ZOOMS[zi];
-  camIx=(minx+maxx)/2;
-  camIy=(miny+maxy)/2 - (padTop-padBot)/2/zoom - 23/zoom;         // shift up for building height + top bar
-  clampCam(); dirty=true; }
+  const z=ZOOMS[bi];
+  return { zi:bi, zoom:z,
+    camIx:(minx+maxx)/2,
+    camIy:(miny+maxy)/2 - (padTop-padBot)/2/z - 23/z };           // shift up for building height + top bar
+}
+function fitCity(){ const f=fitCityFraming(); zi=f.zi; zoom=f.zoom; camIx=f.camIx; camIy=f.camIy; clampCam(); dirty=true; }
+// Tight hero framing for ONE building: centre on it (nudged up so the tower body is
+// vertically centred), pick the largest sane zoom (never above app max) that still
+// leaves ~2 tiles of context on every side. Framing only — no camera mutation.
+function buildingFraming(o){
+  const h=TIER_H[o.tier], elev=o.elev||0, fw=o.fw||1, fd=o.fd||1;
+  const T=gridIso(o.tx,o.ty),R=gridIso(o.tx+fw,o.ty),B=gridIso(o.tx+fw,o.ty+fd),L=gridIso(o.tx,o.ty+fd);
+  const minx=Math.min(T.x,R.x,B.x,L.x), maxx=Math.max(T.x,R.x,B.x,L.x);
+  const miny=Math.min(T.y,R.y,B.y,L.y), maxy=Math.max(T.y,R.y,B.y,L.y);
+  const ctxX=2*2*HW, ctxY=2*2*HH;                                // ~2 tiles of context per side
+  const bw=(maxx-minx)+ctxX*2, bh=(maxy-miny)+h+ctxY*2;          // +tower height in the vertical budget
+  const vw=W||1200, vh=(H||800)-46;
+  let bi=0; for(let i=ZOOMS.length-1;i>=0;i--){ if(bw*ZOOMS[i]<=vw && bh*ZOOMS[i]<=vh){ bi=i; break; } }
+  return { zi:bi, zoom:ZOOMS[bi],
+    camIx:(minx+maxx)/2,
+    camIy:(miny+maxy)/2 - elev - h/2 };                          // raise so the tower sits centred
+}
 function setZoom(dir,cx,cy){ const old=zoom; zi=Math.min(ZOOMS.length-1,Math.max(0,zi+dir)); zoom=ZOOMS[zi]; if(zoom!==old&&cx!=null){ const wx=(cx-W/2)/old+camIx, wy=(cy-H/2)/old+camIy; camIx=wx-(cx-W/2)/zoom; camIy=wy-(cy-H/2)/zoom; } clampCam(); dirty=true; }
 let dragging=false,lastX=0,lastY=0,moved=0;
 cv.addEventListener("pointerdown",e=>{ dragging=true; moved=0; lastX=e.clientX; lastY=e.clientY; cv.classList.add("drag"); cv.setPointerCapture(e.pointerId); hideTip(); });
@@ -1178,11 +1198,14 @@ mm.addEventListener("pointerdown",e=>{ const r=mm.getBoundingClientRect(); const
 // tooltip
 function pointInPoly(px,py,pts){ let inside=false; for(let i=0,j=pts.length-1;i<pts.length;j=i++){ const xi=pts[i].x,yi=pts[i].y,xj=pts[j].x,yj=pts[j].y; if(((yi>py)!==(yj>py))&&(px<(xj-xi)*(py-yi)/(yj-yi)+xi)) inside=!inside; } return inside; }
 let tipVisible=false;
+// tipLot: the building whose tooltip is currently shown (hover OR ?tip pin); null when none.
+// Read by the share-capture hero framing (snapshotted into shareTipLot when the popover opens).
+let tipLot=null;
 function hover(mx,my){ for(let i=world.objs.length-1;i>=0;i--){ const o=world.objs[i]; if(o.kind!=="building"||o.tier===0) continue; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); if(pointInPoly(mx,my,[C.gL,C.gB,C.tB,C.tL])||pointInPoly(mx,my,[C.gB,C.gR,C.tR,C.tB])||pointInPoly(mx,my,[C.tT,C.tR,C.tB,C.tL])){ showTip(o,mx,my); return; } } hideTip(); }
 function showTip(o,mx,my){ tip.querySelector(".name").textContent=nameOf(o)+(o.oldtown?" (Old Town)":""); tip.querySelector(".dist").textContent=o.info.dist+" · "+o.category+(o.secondary?"+"+o.secondary:"");
   const idle=(mode==="timelapse"?curDay:MODEL.day)-o.lastActiveDay; tip.querySelector(".meta").innerHTML="tier: <b>"+o.tier+" "+TIER_NAME[o.tier]+"</b> · WU: <b>"+o.wu+"</b><br>last worked: <b>"+(idle<=0?"today":idle+"d ago")+"</b>"+(o.decay?" · <b>"+(o.decay===2?"cracked":"vined")+"</b>":"")+(o.constructing>0?" · <b>building</b>":"");
-  tip.style.display="block"; tipVisible=true; let x=mx+16,y=my+14; const w=tip.offsetWidth,h=tip.offsetHeight; if(x+w>W-8) x=mx-w-16; if(y+h>H-8) y=my-h-14; tip.style.left=x+"px"; tip.style.top=y+"px"; }
-function hideTip(){ if(tipVisible){ tip.style.display="none"; tipVisible=false; } }
+  tip.style.display="block"; tipVisible=true; tipLot=o; let x=mx+16,y=my+14; const w=tip.offsetWidth,h=tip.offsetHeight; if(x+w>W-8) x=mx-w-16; if(y+h>H-8) y=my-h-14; tip.style.left=x+"px"; tip.style.top=y+"px"; }
+function hideTip(){ if(tipVisible){ tip.style.display="none"; tipVisible=false; } tipLot=null; }
 
 // ============================ CONTROLS WIRING ============================
 function setPlay(){ $("play").innerHTML= tl.playing? "&#9208; pause":"&#9654; play"; }
@@ -1267,24 +1290,39 @@ function shareDayNum(){ return mode==="timelapse"? curDay : (M.day||MODEL.day); 
 function shareFilename(){ return "agentcity-day"+shareDayNum()+".png"; }
 // small bottom-centre notice; reuses chrome styling. reduced-motion => no fade (CSS), timed removal.
 let shareToastT;
+// Hero framing state: shareTipLot is the building the share shot should focus on — snapshotted
+// from tipLot the moment the popover OPENS (a hover tip may be gone by click-time, but a ?tip pin
+// survives), kept until the next open. __lastShareWatermark exposes the composed plaque text for tests.
+let shareTipLot=null, __lastShareWatermark="";
 function shareNotice(msg){ const el=$("shareToast"); if(!el) return; el.textContent=msg; el.classList.add("show");
   clearTimeout(shareToastT); shareToastT=setTimeout(()=>el.classList.remove("show"),2500); }
 // Compose the clean beauty shot: a FRESH frame of the map canvas (no DOM HUD is on it) plus a
 // small pixel-style watermark plaque bottom-right — "agentcity · day N · seed" in the HUD's
 // monospace, light text on a semi-transparent dark plaque. Returns the offscreen canvas.
 function shareCaptureClean(){
-  render();                                                 // one fresh frame so the capture is current
+  // HERO FRAMING: never just grab the live viewport. Focus the pinned/hovered building if the
+  // popover captured one, else a fit-all hero of the built city. Save camera → apply → render →
+  // capture → RESTORE camera exactly → render, so the on-screen view never visibly moves. orient
+  // is left untouched. All synchronous within this call.
+  const sIx=camIx, sIy=camIy, sZoom=zoom, sZi=zi;           // exact save (orient unchanged)
+  const heroLot = (shareTipLot && world.lots.indexOf(shareTipLot)>=0 && shareTipLot.tier>0) ? shareTipLot : null;
+  const f = heroLot ? buildingFraming(heroLot) : fitCityFraming();
+  zi=f.zi; zoom=f.zoom; camIx=f.camIx; camIy=f.camIy; clampCam();
+  render();                                                 // one fresh frame at the hero framing
   const src=cv, w=src.width, h=src.height;                  // DPR-scaled backing store, 1:1
   const off=document.createElement("canvas"); off.width=w; off.height=h;
   const g=off.getContext("2d"); g.imageSmoothingEnabled=false;
   g.drawImage(src,0,0);
   const S=Math.max(1,DPR), pad=10*S, fs=Math.round(13*S);
   g.font=fs+'px "Courier New",ui-monospace,monospace'; g.textBaseline="middle"; g.textAlign="left";
-  const label="agentcity · day "+shareDayNum()+" · "+SEED;
+  // building shots prepend the display name (nameOf respects the repo-names privacy toggle)
+  const label=(heroLot? nameOf(heroLot)+" · " : "")+"agentcity · day "+shareDayNum()+" · "+SEED;
+  __lastShareWatermark=label;
   const tw=g.measureText(label).width, bh=fs+pad, bw=tw+pad*2, x=w-bw-pad, y=h-bh-pad;
   g.fillStyle="rgba(12,11,24,0.72)"; g.fillRect(x,y,bw,bh);                         // dark plaque
   g.strokeStyle="rgba(58,56,86,0.9)"; g.lineWidth=Math.max(1,S); g.strokeRect(x+0.5,y+0.5,bw-1,bh-1);
   g.fillStyle="rgba(232,228,216,0.92)"; g.fillText(label,x+pad,y+bh/2+0.5);         // light --ink text
+  camIx=sIx; camIy=sIy; zoom=sZoom; zi=sZi; render();       // RESTORE exact live view (bit-identical)
   return off;
 }
 function dataURLToBlob(u){ const p=u.split(","), bstr=atob(p[1]), n=bstr.length, arr=new Uint8Array(n);
@@ -1312,6 +1350,7 @@ async function shareSavePNG(){ try{ const blob=await shareBlob(); downloadBlob(b
 // popover: outside-click / Escape / after-action all close it; buttons are real <button>s (keyboard-accessible).
 function shareOpen(){ return $("sharePop").classList.contains("open"); }
 function setSharePop(open){ const p=$("sharePop"), b=$("shareBtn"); if(!p||!b) return;
+  if(open) shareTipLot=tipLot;                                   // snapshot focus building at open (survives the action-close)
   p.classList.toggle("open",open); b.classList.toggle("on",open); b.setAttribute("aria-expanded",open?"true":"false");
   if(open){ const f=p.querySelector(".sh"); if(f) f.focus(); } }
 $("shareBtn").addEventListener("click",()=>setSharePop(!shareOpen()));
@@ -1565,6 +1604,37 @@ if(SELFTEST){ (async()=>{
       setSharePop(true); const opened=shareOpen(); setSharePop(false); const closed=!shareOpen();
       res.checks.shareCaptureClean = durl.indexOf("data:image/png")===0 && durl.length>10000 && btnOK && opened && closed;
     }catch(e){ res.checks.shareCaptureClean=false; res.checks.shareThrew=String(e&&e.message||e); }
+    // 14b) HERO FRAMING: (a) no-tip capture is a valid PNG AND leaves camIx/camIy/zoom bit-identical;
+    //      (b) a pinned-tip capture is valid, restores the camera, and prepends the lot name to the
+    //      watermark. Camera save/restore is asserted by ===; window.__hero* expose the dataURLs so a
+    //      headless harness can write eyeball artifacts (test-mode only).
+    setMode("live"); fitCity(); render();
+    try{
+      hideTip(); setSharePop(false); shareTipLot=null;                       // ensure fit-all path
+      const a0=[camIx,camIy,zoom];
+      const capC=shareCaptureClean(); const durlC=capC.toDataURL("image/png");
+      const camSameC = camIx===a0[0] && camIy===a0[1] && zoom===a0[2];
+      res.checks.heroCityValid = durlC.indexOf("data:image/png")===0 && durlC.length>10000;
+      res.checks.heroCityCamRestored = camSameC;
+      window.__heroCity = durlC;
+      // pinned tip: prefer ?tip=<repo> (real deep-link machinery), else the tallest building
+      const q=new URLSearchParams(location.search); const tipName=q.get("tip");
+      const lot=(tipName&&world.lots.find(l=>l.repo===tipName&&l.tier>0))
+        || world.lots.filter(l=>l.tier>0).sort((x,y)=>y.tier-x.tier)[0] || world.lots[0];
+      const cc=tileCenterIso(lot.tx,lot.ty), s2=projWorld(cc.x,cc.y);
+      showTip(lot,s2.x,s2.y); setSharePop(true);                             // snapshot shareTipLot=lot
+      const a1=[camIx,camIy,zoom];
+      const capB=shareCaptureClean(); const durlB=capB.toDataURL("image/png"); const wmB=__lastShareWatermark;
+      const camSameB = camIx===a1[0] && camIy===a1[1] && zoom===a1[2];
+      setSharePop(false); hideTip(); shareTipLot=null; render();
+      res.checks.heroBuildingValid = durlB.indexOf("data:image/png")===0 && durlB.length>10000;
+      res.checks.heroBuildingCamRestored = camSameB;
+      res.checks.heroBuildingWatermark = wmB;
+      res.checks.heroBuildingNameInWatermark = wmB.indexOf(nameOf(lot)+" · ")===0;
+      window.__heroBuilding = durlB;
+      res.checks.shareHeroFraming = res.checks.heroCityValid && res.checks.heroCityCamRestored
+        && res.checks.heroBuildingValid && res.checks.heroBuildingCamRestored && res.checks.heroBuildingNameInWatermark;
+    }catch(e){ res.checks.shareHeroFraming=false; res.checks.heroThrew=String(e&&e.message||e); }
     // 15) MAP LAYOUT drawer control: section + input + button exist; input filters illegal chars
     //     on the fly (maxlength 64). Clicking issues a POST we STUB so the selftest NEVER navigates:
     //     the click path must disable → toast the error → re-enable, all without a real request.
@@ -1599,6 +1669,7 @@ if(SELFTEST){ (async()=>{
       && res.checks.shipsOnWater
       && res.checks.activityInjectClean
       && res.checks.shareCaptureClean
+      && res.checks.shareHeroFraming
       && res.checks.mapLayoutSection && res.checks.mapLayoutHasInput && res.checks.mapLayoutHasButton
       && res.checks.mapLayoutSanitizes && res.checks.mapLayoutTargetsRefound && res.checks.mapLayoutClickCycle
       && errors.length===0;
