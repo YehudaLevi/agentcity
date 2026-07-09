@@ -7,8 +7,8 @@
 
 ## 0. Where things stand
 
-- `main` = last verified-good state (all committed work tested; 64 engine
-  tests green). The user's live city: seed `riviera`, river biome, day ~7,
+- `main` = last verified-good state (all committed work tested; 68 engine
+  tests green as of the 2026-07-09 full-reveal contract fix, see §2). The user's live city: seed `riviera`, river biome, day ~7,
   16 lots, 0 phantoms, all 36 chunks revealed. Server: `node
   bin/agentcity.js` on :4243; user runs it locally.
 - Branch **`wip/rotation-fix`** = 182-line UNVERIFIED renderer surgery from
@@ -33,12 +33,37 @@ painted, then merge or salvage. Riviera bundle also exposed
 `foldEqualsModel:false` on real data — an ENGINE replay-equality seam on
 real histories (synthetic bundles pass); investigate separately (§2).
 
-## 2. Engine: replay-equality seam on REAL data (P1)
+## 2. Engine: replay-equality seam on REAL data — FIXED 2026-07-09
 
-Renderer selftest reports foldEqualsModel:false for real-history bundles
-(riviera) while all synthetic bundles (fixture/t1/hills) pass. Suspects:
-deltas around history-import caps, renovation, or road-widening paths on
-real streams. Repro: compile riviera bundle → inject → ?selftest.
+Root cause was a full-reveal contract divergence: the engine repurposed
+chunk.reveal deltas to "district surveyed" moments (only ~8 chunks ever get
+one) while the renderer's fold() still treated them as map existence — so
+delta-replay rebuilt 8/36 chunks vs the model's 36 (foldEqualsModel:false),
+and live view painted 28 chunks as black fog (the "not fully revealed"
+dogfood report). A second bug compounded it: finalize snapshots the
+checkpoint BEFORE folding the open day, so the open day's survey re-emitted
+its chunk.reveal on EVERY server poll (52 dupes in one day on the live log).
+Fixed in the same wave: renderer fold() treats all chunks as revealed from
+day 0 (fog paint removed, stakes re-keyed to unsurveyed-adjacent, minimap
+paints full terrain, selftest gained full-reveal checks); engine defers
+open-day chunk.reveal emission until the day commits (foldingOpenDay flag,
+emit-at-most-once guaranteed, 4 regression tests). Verified: 68 tests green
++ headless ?selftest PASS (incl. foldEqualsModel:true) on a fresh read-only
+riviera compile from real history. NOTE: the user's live deltas.jsonl still
+contains the ~51 historical duplicate reveals (harmless: dedup'd by
+renderer; shows dup "district surveyed" log lines) — a refound cleans it.
+
+ALSO FIXED (same day): **black grass on MAIN** — grass tiles painted
+rgb(0,0,0) because drawTile used shade(mix(...)) while shade() parsed only
+"#hex" and mix() returns "rgb()" (NaN>>16 → 0). The sky gradient's nested
+mix(mix()) had the same bug (near-black sky bottom even at noon). The
+"BLACK-GRASS regression" §1 pins on the WIP branch was actually this,
+on main, since the fidelity wave. Fixed via a cnum() parser accepting both
+formats; selftest gained a grassColorLive guard. Verified by headless
+screenshot on the real riviera bundle (grass green, full geography, day).
+WARNING for the §1 WIP verification: wip/rotation-fix's city.html surgery
+predates today's fold/reveal/shade changes — expect merge conflicts;
+rebase/salvage rather than merge blind.
 
 ## 3. Renderer polish queue (P1, single wave, work on a COPY of
 web/city.html — see §8 process note)
