@@ -14,8 +14,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { defaultRoot, paths } from "../src/persist.js";
-import { boot, poll, refound, foundFromEvents, defaultSources, type Sources } from "../src/founding.js";
-import { createAgentcityServer, type AgentcityServer } from "../src/server.js";
+import { boot, poll, refound, foundFromEvents, defaultSources, type Sources, type BootResult } from "../src/founding.js";
+import { createAgentcityServer, type AgentcityServer, type CityBundle } from "../src/server.js";
 import { generateDemoEvents } from "../src/demo-events.js";
 import { parseArgs, type Args } from "../src/cli-args.js";
 
@@ -69,7 +69,15 @@ async function serve(args: Args): Promise<void> {
   const sources = sourcesFrom(args);
   const result = boot(root, sources, { seed: args.seed });
 
-  const server = createAgentcityServer({ bundle: { model: result.model, deltas: result.deltas } });
+  const server = createAgentcityServer({
+    bundle: { model: result.model, deltas: result.deltas },
+    // Renderer "generate new map layout" button → recompile from archives with a
+    // new seed via the SAME code path as `refound --yes`, then serve the result.
+    onRefound: async (seed): Promise<CityBundle> => {
+      const re = refoundCity(root, sources, seed);
+      return { model: re.model, deltas: re.deltas };
+    },
+  });
   const port = await listenOrExit(server, args.port ?? DEFAULT_PORT);
   announce(port, result.founded);
 
@@ -107,7 +115,15 @@ async function serveDemo(args: Args): Promise<void> {
   const seed = args.seed ?? "demo";
   const result = foundFromEvents(root, generateDemoEvents(seed), seed);
 
-  const server = createAgentcityServer({ bundle: { model: result.model, deltas: result.deltas } });
+  const server = createAgentcityServer({
+    bundle: { model: result.model, deltas: result.deltas },
+    // Demo refound: regenerate the seeded synthetic city with the new seed into
+    // the same throwaway root (never touches real data — rule 7).
+    onRefound: async (newSeed): Promise<CityBundle> => {
+      const re = foundFromEvents(root, generateDemoEvents(newSeed), newSeed);
+      return { model: re.model, deltas: re.deltas };
+    },
+  });
   const port = await listenOrExit(server, args.port ?? DEFAULT_PORT);
   console.log("(demo mode — seeded synthetic city, real data untouched)");
   announce(port, true);
@@ -122,17 +138,27 @@ async function serveDemo(args: Args): Promise<void> {
   });
 }
 
+/**
+ * The one refound code path — shared by the CLI `refound --yes` command and the
+ * server's POST /refound hook. Wipes the derived state (checkpoint + delta log),
+ * leaves the archives untouched (rule 4), and re-founds from archives + sources
+ * with the new seed. found()/refound() persists the resolved seed back to config,
+ * so a server-triggered refound leaves disk exactly as consistent as a CLI one.
+ */
+function refoundCity(root: string, sources: Sources, seed?: string): BootResult {
+  const p = paths(root);
+  rmSync(p.checkpoint, { force: true });
+  rmSync(p.deltas, { force: true });
+  return refound(root, sources, { seed });
+}
+
 function doRefound(args: Args): void {
   if (!args.yes) {
     console.error("refound rewrites the city from its archives — re-run with --yes to confirm");
     process.exit(1);
   }
   const root = args.root ?? defaultRoot();
-  const p = paths(root);
-  // wipe the derived state; archives (rule 4) stay untouched and re-derive it.
-  rmSync(p.checkpoint, { force: true });
-  rmSync(p.deltas, { force: true });
-  const result = refound(root, sourcesFrom(args), { seed: args.seed });
+  const result = refoundCity(root, sourcesFrom(args), args.seed);
   console.log(
     `re-founded: seed=${result.model.seed} day=${result.model.day} lots=${result.model.lots.length} deltas=${result.deltas.length}`
   );

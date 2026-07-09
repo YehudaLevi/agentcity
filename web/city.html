@@ -80,6 +80,12 @@
   .segrow .seg:hover{background:#2c2c4e;color:var(--gold);}
   .segrow .seg.on{background:#2c2c4e;color:var(--cyan);border-color:var(--cyan);}
   #tod{flex:1;min-width:120px;}
+  /* ---- map layout (refound) control ---- */
+  #seedInput{width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;color:var(--ink);background:#0c0b18;
+    border:2px solid var(--line);padding:6px 8px;letter-spacing:.5px;}
+  #seedInput:focus{outline:none;border-color:var(--cyan);}
+  #genLayout.busy{opacity:.55;cursor:default;color:var(--ink-dim);border-color:var(--line);background:var(--panel2);}
+  .drawer .cap{color:var(--ink-dim);font-size:11px;line-height:1.35;letter-spacing:.3px;}
   .tl-only{display:none;}
   body.mode-timelapse .tl-only{display:flex;}
 
@@ -250,6 +256,13 @@
     <div class="setting tl-only">
       <span class="lbl">TIMELAPSE SPEED</span>
       <div class="segrow"><div class="seg" style="cursor:default;border-color:transparent;background:none;color:var(--ink-dim)">use the transport bar &darr;</div></div>
+    </div>
+
+    <h4>MAP LAYOUT</h4>
+    <div class="setting">
+      <input id="seedInput" type="text" placeholder="seed — leave empty for random" maxlength="64" autocomplete="off" spellcheck="false">
+      <div class="segrow"><div class="seg" id="genLayout" role="button" tabindex="0">generate new layout</div></div>
+      <span class="cap" id="genCap">recompiles your city onto new geography &mdash; your history is safe</span>
     </div>
   </div>
 
@@ -1212,6 +1225,40 @@ document.querySelectorAll("#bright .seg").forEach(el=>el.addEventListener("click
 
 $("fsBtn").addEventListener("click",()=>{ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(_){} });
 
+// ============================ MAP LAYOUT — refound onto new geography (TRUST: local-first) ============================
+// Explicit user action only. The ONLY fetch anywhere in the app: a single POST to the page's OWN
+// local origin (the 127.0.0.1 server), fired solely on click / Enter. No analytics / beacon / cross-origin.
+// On file:// (no server) the fetch rejects and we surface a friendly toast instead of navigating.
+const SEED_STRIP=/[^a-zA-Z0-9\-_ ]+/g;                          // allowed seed alphabet: letters, digits, - _ space
+function sanitizeSeed(v){ return String(v==null?"":v).replace(SEED_STRIP,"").slice(0,64); }
+(function initMapLayout(){
+  const inp=$("seedInput"), btn=$("genLayout"); if(!inp||!btn) return;
+  // filter-on-input: strip disallowed chars as they are typed / pasted, keep the caret sensible.
+  inp.addEventListener("input",()=>{ const before=inp.value, clean=sanitizeSeed(before);
+    if(clean!==before){ const pos=(inp.selectionStart||0)-(before.length-clean.length); inp.value=clean; try{ inp.setSelectionRange(pos,pos); }catch(_){} } });
+  let busy=false;
+  async function generate(){
+    if(busy) return; busy=true;
+    const seed=sanitizeSeed(inp.value).trim();                  // may be "" → server picks a random seed
+    btn.classList.add("busy"); btn.textContent="generating…"; inp.disabled=true;
+    const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),60000);  // refound takes seconds; generous cap
+    let done=false;                                             // set on success so we DON'T re-enable before reload
+    try{
+      const r=await fetch("/refound",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({seed}),signal:ctrl.signal});
+      let j=null; try{ j=await r.json(); }catch(_){}
+      if(r&&r.ok&&j&&j.ok){ done=true; location.reload(); return; }   // success → reload onto the new map
+      throw new Error((j&&j.error)||("server error "+((r&&r.status)||"?")));
+    }catch(e){
+      if(!done) shareNotice(e&&e.name==="AbortError" ? "generating timed out — try again" : "couldn't generate — is the server running?");
+    }finally{
+      clearTimeout(timer);
+      if(!done){ busy=false; btn.classList.remove("busy"); btn.textContent="generate new layout"; inp.disabled=false; }
+    }
+  }
+  btn.addEventListener("click",generate);
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); generate(); } });
+})();
+
 // ============================ SHARE (explicit user action only — TRUST: local-first) ============================
 // Nothing leaves the machine unless the user clicks. The ONLY outbound call anywhere is
 // window.open() on an X intent URL, fired solely from an explicit "post to X" click. The
@@ -1403,7 +1450,9 @@ requestAnimationFrame(loop);
 if(REDUCE){ ["pointermove","pointerup","wheel"].forEach(ev=>window.addEventListener(ev,()=>{dirty=true;})); }
 
 // ============================ SELF-TEST (headless smoke; ?selftest) ============================
-if(SELFTEST){
+// Body is an async IIFE so the map-layout check can await a stubbed fetch round-trip; every
+// pre-existing check still runs synchronously up to that point (no behavior change).
+if(SELFTEST){ (async()=>{
   try{
     const res={ok:true, errors:[], checks:{}};
     // Order-canonical city equality: a server/compiled model arrives with
@@ -1516,6 +1565,28 @@ if(SELFTEST){
       setSharePop(true); const opened=shareOpen(); setSharePop(false); const closed=!shareOpen();
       res.checks.shareCaptureClean = durl.indexOf("data:image/png")===0 && durl.length>10000 && btnOK && opened && closed;
     }catch(e){ res.checks.shareCaptureClean=false; res.checks.shareThrew=String(e&&e.message||e); }
+    // 15) MAP LAYOUT drawer control: section + input + button exist; input filters illegal chars
+    //     on the fly (maxlength 64). Clicking issues a POST we STUB so the selftest NEVER navigates:
+    //     the click path must disable → toast the error → re-enable, all without a real request.
+    setDrawer(true);
+    res.checks.mapLayoutSection=[...document.querySelectorAll("#drawer h4")].some(h=>h.textContent.trim()==="MAP LAYOUT");
+    const mlInp=$("seedInput"), mlBtn=$("genLayout");
+    res.checks.mapLayoutHasInput=!!mlInp && mlInp.maxLength===64;
+    res.checks.mapLayoutHasButton=!!mlBtn;
+    // filter-on-input: illegal chars stripped, legal alphabet ([a-zA-Z0-9-_ ]) preserved
+    mlInp.value="a!b@c 星d-_9"; mlInp.dispatchEvent(new Event("input",{bubbles:true}));
+    res.checks.mapLayoutSanitizes = mlInp.value==="abc d-_9";
+    // stub fetch → force {ok:false,error:"selftest"} so click exercises UI state but never navigates
+    const realFetch=window.fetch; let fetchURL=null;
+    window.fetch=(u)=>{ fetchURL=String(u); return Promise.resolve({ok:true,status:200,json:async()=>({ok:false,error:"selftest"})}); };
+    const toastEl=$("shareToast");
+    mlBtn.click();
+    const busyNow=mlBtn.classList.contains("busy") && mlInp.disabled===true;   // synchronous handler state → proves no instant nav
+    await new Promise(r=>setTimeout(r,0));                                      // let the stubbed fetch + finally resolve
+    const reenabled=!mlBtn.classList.contains("busy") && mlInp.disabled===false;
+    res.checks.mapLayoutTargetsRefound = fetchURL==="/refound";
+    res.checks.mapLayoutClickCycle = busyNow && reenabled && (toastEl?toastEl.classList.contains("show"):true);
+    window.fetch=realFetch; mlInp.value="";
     res.errors=errors.slice();
     res.ok = res.checks.foldEqualsModel && res.checks.fullRevealModel && res.checks.fullRevealFold
       && res.checks.grassColorLive
@@ -1528,12 +1599,14 @@ if(SELFTEST){
       && res.checks.shipsOnWater
       && res.checks.activityInjectClean
       && res.checks.shareCaptureClean
+      && res.checks.mapLayoutSection && res.checks.mapLayoutHasInput && res.checks.mapLayoutHasButton
+      && res.checks.mapLayoutSanitizes && res.checks.mapLayoutTargetsRefound && res.checks.mapLayoutClickCycle
       && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);
     document.title="selftest:"+(res.ok?"PASS":"FAIL");
   }catch(err){ $("selftest").textContent="SELFTEST "+JSON.stringify({ok:false,thrown:String(err&&err.stack||err),errors}); document.title="selftest:THROW"; }
-}
+})(); }
 })();
 </script>
 </body>
