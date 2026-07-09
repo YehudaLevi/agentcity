@@ -1300,15 +1300,11 @@ function shareNotice(msg){ const el=$("shareToast"); if(!el) return; el.textCont
 // small pixel-style watermark plaque bottom-right — "agentcity · day N · seed" in the HUD's
 // monospace, light text on a semi-transparent dark plaque. Returns the offscreen canvas.
 function shareCaptureClean(){
-  // HERO FRAMING: never just grab the live viewport. Focus the pinned/hovered building if the
-  // popover captured one, else a fit-all hero of the built city. Save camera → apply → render →
-  // capture → RESTORE camera exactly → render, so the on-screen view never visibly moves. orient
-  // is left untouched. All synchronous within this call.
-  const sIx=camIx, sIy=camIy, sZoom=zoom, sZi=zi;           // exact save (orient unchanged)
+  // Capture the USER'S view (their zoom/position — they compose the shot; user decision
+  // 2026-07-09, supersedes auto hero-framing). A focused building tooltip still names the
+  // watermark. buildingFraming/fitCityFraming remain available for future card presets.
   const heroLot = (shareTipLot && world.lots.indexOf(shareTipLot)>=0 && shareTipLot.tier>0) ? shareTipLot : null;
-  const f = heroLot ? buildingFraming(heroLot) : fitCityFraming();
-  zi=f.zi; zoom=f.zoom; camIx=f.camIx; camIy=f.camIy; clampCam();
-  render();                                                 // one fresh frame at the hero framing
+  render();                                                 // one fresh frame of the live viewport
   const src=cv, w=src.width, h=src.height;                  // DPR-scaled backing store, 1:1
   const off=document.createElement("canvas"); off.width=w; off.height=h;
   const g=off.getContext("2d"); g.imageSmoothingEnabled=false;
@@ -1322,7 +1318,6 @@ function shareCaptureClean(){
   g.fillStyle="rgba(12,11,24,0.72)"; g.fillRect(x,y,bw,bh);                         // dark plaque
   g.strokeStyle="rgba(58,56,86,0.9)"; g.lineWidth=Math.max(1,S); g.strokeRect(x+0.5,y+0.5,bw-1,bh-1);
   g.fillStyle="rgba(232,228,216,0.92)"; g.fillText(label,x+pad,y+bh/2+0.5);         // light --ink text
-  camIx=sIx; camIy=sIy; zoom=sZoom; zi=sZi; render();       // RESTORE exact live view (bit-identical)
   return off;
 }
 function dataURLToBlob(u){ const p=u.split(","), bstr=atob(p[1]), n=bstr.length, arr=new Uint8Array(n);
@@ -1604,10 +1599,10 @@ if(SELFTEST){ (async()=>{
       setSharePop(true); const opened=shareOpen(); setSharePop(false); const closed=!shareOpen();
       res.checks.shareCaptureClean = durl.indexOf("data:image/png")===0 && durl.length>10000 && btnOK && opened && closed;
     }catch(e){ res.checks.shareCaptureClean=false; res.checks.shareThrew=String(e&&e.message||e); }
-    // 14b) HERO FRAMING: (a) no-tip capture is a valid PNG AND leaves camIx/camIy/zoom bit-identical;
-    //      (b) a pinned-tip capture is valid, restores the camera, and prepends the lot name to the
-    //      watermark. Camera save/restore is asserted by ===; window.__hero* expose the dataURLs so a
-    //      headless harness can write eyeball artifacts (test-mode only).
+    // 14b) SHARE CAPTURE semantics (viewport-based, user decision 2026-07-09): (a) a no-tip capture
+    //      is a valid PNG and never moves the camera; (b) a pinned-tip capture is valid, never moves
+    //      the camera, and prepends the lot name to the watermark. window.__hero* expose the dataURLs
+    //      so a headless harness can write eyeball artifacts (test-mode only).
     setMode("live"); fitCity(); render();
     try{
       hideTip(); setSharePop(false); shareTipLot=null;                       // ensure fit-all path
