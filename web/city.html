@@ -183,7 +183,7 @@
     <span class="date" id="dayDate">&mdash;</span>
     <span id="wx" class="date">&#9728; clear</span>
     <span class="spacer"></span>
-    <button class="seg ico" id="sound" title="toggle ambient sound">&#128264;</button>
+    <button class="seg ico" id="sound" title="sound alerts: agent waiting on you + task done">&#128264;</button>
     <div class="grp" id="rotate" title="rotate the map (r)">
       <div class="seg ico" id="rotL">&#8635;</div>
       <div class="seg ico" id="rotR">&#8634;</div>
@@ -666,7 +666,7 @@ function routePos(rt,t){ const p=rt.pts; if(p.length<2) return {x:p[0].x,y:p[0].
   for(let i=0;i<rt.seg.length;i++){ if(target<=rt.seg[i]||i===rt.seg.length-1){ const f=rt.seg[i]?target/rt.seg[i]:0; return {x:p[i].x+(p[i+1].x-p[i].x)*f, y:p[i].y+(p[i+1].y-p[i].y)*f}; } target-=rt.seg[i]; } }
 function spawnShip(){ const rt=ensureShipRoute(); if(!rt) return;   // no water route => no harbour narrative, skip
   const s=routePos(rt,1);   // enter at the edge/entry tile
-  ships.push({state:"arriving",prog:0,x:s.x,y:s.y,dir:null,rid:world._id,dock:{x:rt.dock[0]+0.5,y:rt.dock[1]+0.5},unloadT:0,cargo:0}); Audio.horn(); }
+  ships.push({state:"arriving",prog:0,x:s.x,y:s.y,dir:null,rid:world._id,dock:{x:rt.dock[0]+0.5,y:rt.dock[1]+0.5},unloadT:0,cargo:0}); }
 function updateShips(dt){ if(!animate){ ships.length=0; return; } const ease=p=>p*p*(3-2*p);
   const rt=ensureShipRoute();
   for(let i=ships.length-1;i>=0;i--) if(ships[i].rid!==world._id) ships.splice(i,1);   // world rebuilt => drop ships routed on the stale world (atmosphere)
@@ -678,7 +678,7 @@ function updateShips(dt){ if(!animate){ ships.length=0; return; } const ease=p=>
   const heading=(sh,t,sign)=>{ const a=routePos(rt,Math.max(0,t-0.03)), b=routePos(rt,Math.min(1,t+0.03));
     let dx=(b.x-a.x)*sign, dy=(b.y-a.y)*sign; const m=Math.hypot(dx,dy); if(m>1e-4) sh.dir={x:dx/m,y:dy/m}; };
   for(let i=ships.length-1;i>=0;i--){ const sh=ships[i];
-    if(sh.state==="arriving"){ sh.prog+=dt/travel; const t=1-ease(Math.min(1,sh.prog)); const p=routePos(rt,t); sh.x=p.x; sh.y=p.y; heading(sh,t,-1); if(sh.prog>=1){sh.x=sh.dock.x;sh.y=sh.dock.y;sh.state="docked";sh.unloadT=0;Audio.horn();} }
+    if(sh.state==="arriving"){ sh.prog+=dt/travel; const t=1-ease(Math.min(1,sh.prog)); const p=routePos(rt,t); sh.x=p.x; sh.y=p.y; heading(sh,t,-1); if(sh.prog>=1){sh.x=sh.dock.x;sh.y=sh.dock.y;sh.state="docked";sh.unloadT=0;} }
     else if(sh.state==="docked"){ sh.unloadT+=dt; sh.cargo=Math.min(3,Math.floor(sh.unloadT/(rate*0.25))+1); if(sh.unloadT>rate*1.1){sh.state="departing";sh.prog=0;} }
     else if(sh.state==="departing"){ sh.prog+=dt/travel; const t=ease(Math.min(1,sh.prog)); const p=routePos(rt,t); sh.x=p.x; sh.y=p.y; heading(sh,t,1); if(sh.prog>=1) ships.splice(i,1); } } }
 
@@ -1137,10 +1137,11 @@ const Audio={ctx:null,master:null,on:false,
   disable(){ this.on=false; },
   tone(f,t0,dur,type,peak){ const c=this.ctx,o=c.createOscillator(),g=c.createGain(); o.type=type||"sine"; o.frequency.value=f; g.gain.setValueAtTime(0.0001,t0); g.gain.linearRampToValueAtTime(peak||0.4,t0+0.02); g.gain.exponentialRampToValueAtTime(0.0008,t0+dur); o.connect(g); g.connect(this.master); o.start(t0); o.stop(t0+dur+0.05); },
   ding(){ if(!this.on||!this.ctx) return; const t=this.ctx.currentTime; this.tone(880,t,0.4,"sine",0.3); this.tone(1174.7,t+0.13,0.5,"sine",0.24); },
-  horn(){ if(!this.on||!this.ctx) return; const c=this.ctx,t=c.currentTime,g=c.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(0.5,t+0.18); g.gain.setValueAtTime(0.5,t+0.7); g.gain.exponentialRampToValueAtTime(0.001,t+1.5); const lp=c.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=520; g.connect(lp); lp.connect(this.master); [110,110.7,164.8].forEach((f,i)=>{ const o=c.createOscillator(); o.type=i<2?"triangle":"sine"; o.frequency.value=f; o.connect(g); o.start(t); o.stop(t+1.6); }); },
+  // gentle descending two-note bell — "your agent is waiting on you"
+  bell(){ if(!this.on||!this.ctx) return; const t=this.ctx.currentTime; this.tone(659.3,t,0.5,"sine",0.22); this.tone(523.3,t+0.22,0.7,"sine",0.18); },
 };
 function updateSoundUI(){ const on=Audio.on; const b=$("sound"); if(b) b.classList.toggle("on",on);
-  const s=$("soundToggle"); if(s){ s.classList.toggle("on",on); s.textContent="ambient: "+(on?"on":"off"); } }
+  const s=$("soundToggle"); if(s){ s.classList.toggle("on",on); s.textContent="alerts (waiting/done): "+(on?"on":"off"); } }
 $("sound").addEventListener("click",()=>Audio.toggle());
 $("soundToggle").addEventListener("click",()=>Audio.toggle());
 
@@ -1383,6 +1384,7 @@ function onActivity(a){ if(REDUCE||!a||!a.repo) return; const o=world.lots.find(
   let b=beams[o.id]; const rawCol=beamColorFor(a);                              // null when the msg carries no color signal (turn.*/session.*)
   const targetCol=rawCol||(b&&b.colTo)||"#cfe0ff";
   if(!b){ b=beams[o.id]={last:now,appear:now,mode:waiting?"waiting":"work",colFrom:targetCol,colTo:targetCol,colT0:now}; }
+  if(waiting&&b.mode!=="waiting"&&Audio.on) Audio.bell();   // ring once per wait-start, not per repeated waiting event
   b.last=now; b.mode=waiting?"waiting":"work";   // any non-waiting activity clears the mono waiting beam
   if(rawCol&&b.colTo!==targetCol){ const cur=mix(b.colFrom,b.colTo,Math.min(1,(now-b.colT0)/500)); b.colFrom=cur; b.colTo=targetCol; b.colT0=now; }   // 500ms smooth lerp on type change
   // hard-cap simultaneous beams (drop oldest-activity)
