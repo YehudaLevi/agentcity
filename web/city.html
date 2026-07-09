@@ -140,6 +140,25 @@
     font-size:11px;color:var(--ink-dim);letter-spacing:1.5px;pointer-events:none;opacity:.6;}
   #selftest{position:absolute;left:-9999px;top:-9999px;white-space:pre;}
 
+  /* ---- share popover (chrome-styled dropdown under the share button) ---- */
+  #sharePop{position:fixed;top:50px;right:10px;z-index:25;display:none;flex-direction:column;
+    gap:4px;padding:8px;min-width:186px;}
+  #sharePop.open{display:flex;}
+  #sharePop .hd{font-size:11px;color:var(--ink-dim);letter-spacing:1.5px;margin:0 2px 5px;}
+  #sharePop .sh{font-family:inherit;font-size:13px;color:var(--ink);background:var(--panel2);
+    border:2px solid var(--line);cursor:pointer;padding:8px 10px;line-height:1;letter-spacing:.5px;
+    text-align:left;display:flex;align-items:center;gap:9px;}
+  #sharePop .sh:hover{background:#2c2c4e;color:var(--gold);}
+  #sharePop .sh:focus-visible{outline:none;border-color:var(--cyan);color:var(--cyan);}
+  #sharePop .sh .g{font-size:15px;width:18px;text-align:center;flex:none;}
+
+  /* ---- share notice (small bottom-centre plaque; fades ~2.5s) ---- */
+  #shareToast{position:absolute;left:50%;bottom:56px;transform:translateX(-50%) translateY(6px);
+    z-index:30;opacity:0;pointer-events:none;text-align:center;font-size:13px;color:var(--ink);
+    letter-spacing:.5px;max-width:90vw;transition:opacity .35s ease, transform .35s ease;}
+  #shareToast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  @media (prefers-reduced-motion: reduce){ #shareToast{transition:none;} }
+
   @media (max-width:900px){ #rail{display:none;} }
   @media (max-width:640px){ #hudTL{max-width:150px;} #legend{display:none;} }
 </style>
@@ -164,8 +183,17 @@
       <div class="seg ico" id="rotR">&#8634;</div>
     </div>
     <button class="seg ico" id="fsBtn" title="fullscreen">&#9974;</button>
+    <button class="seg ico" id="shareBtn" title="share this city" aria-haspopup="true" aria-expanded="false">&#128228;</button>
     <button class="seg ico" id="logBtn" title="information log">&#128220;</button>
     <button class="seg ico" id="menuBtn" title="menu &amp; settings">&#9776;</button>
+  </div>
+
+  <!-- SHARE POPOVER: explicit-action share menu (toggled by #shareBtn) -->
+  <div id="sharePop" class="panel" role="menu" aria-label="share this city">
+    <div class="hd">SHARE THIS CITY</div>
+    <button class="sh" id="shareX" role="menuitem"><span class="g">&#120143;</span>post to X</button>
+    <button class="sh" id="shareSlack" role="menuitem"><span class="g">&#128203;</span>copy for Slack</button>
+    <button class="sh" id="sharePng" role="menuitem"><span class="g">&#128190;</span>save PNG</button>
   </div>
 
   <!-- LEFT DRAWER: stats · legend · settings -->
@@ -259,6 +287,8 @@
     <div class="t-title">&#9875; new repo founded</div>
     <div class="t-name"></div>
   </div>
+
+  <div id="shareToast" class="panel" role="status" aria-live="polite"></div>
 
   <div id="tip" class="panel">
     <div class="name"></div>
@@ -1182,6 +1212,70 @@ document.querySelectorAll("#bright .seg").forEach(el=>el.addEventListener("click
 
 $("fsBtn").addEventListener("click",()=>{ try{ if(document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen(); }catch(_){} });
 
+// ============================ SHARE (explicit user action only — TRUST: local-first) ============================
+// Nothing leaves the machine unless the user clicks. The ONLY outbound call anywhere is
+// window.open() on an X intent URL, fired solely from an explicit "post to X" click. The
+// beauty shot is composed LOCALLY (offscreen canvas + watermark) and saved / clipboard-copied
+// via the browser. No fetch / beacon / analytics. Selftest never triggers open/download/clipboard.
+function shareDayNum(){ return mode==="timelapse"? curDay : (M.day||MODEL.day); }
+function shareFilename(){ return "agentcity-day"+shareDayNum()+".png"; }
+// small bottom-centre notice; reuses chrome styling. reduced-motion => no fade (CSS), timed removal.
+let shareToastT;
+function shareNotice(msg){ const el=$("shareToast"); if(!el) return; el.textContent=msg; el.classList.add("show");
+  clearTimeout(shareToastT); shareToastT=setTimeout(()=>el.classList.remove("show"),2500); }
+// Compose the clean beauty shot: a FRESH frame of the map canvas (no DOM HUD is on it) plus a
+// small pixel-style watermark plaque bottom-right — "agentcity · day N · seed" in the HUD's
+// monospace, light text on a semi-transparent dark plaque. Returns the offscreen canvas.
+function shareCaptureClean(){
+  render();                                                 // one fresh frame so the capture is current
+  const src=cv, w=src.width, h=src.height;                  // DPR-scaled backing store, 1:1
+  const off=document.createElement("canvas"); off.width=w; off.height=h;
+  const g=off.getContext("2d"); g.imageSmoothingEnabled=false;
+  g.drawImage(src,0,0);
+  const S=Math.max(1,DPR), pad=10*S, fs=Math.round(13*S);
+  g.font=fs+'px "Courier New",ui-monospace,monospace'; g.textBaseline="middle"; g.textAlign="left";
+  const label="agentcity · day "+shareDayNum()+" · "+SEED;
+  const tw=g.measureText(label).width, bh=fs+pad, bw=tw+pad*2, x=w-bw-pad, y=h-bh-pad;
+  g.fillStyle="rgba(12,11,24,0.72)"; g.fillRect(x,y,bw,bh);                         // dark plaque
+  g.strokeStyle="rgba(58,56,86,0.9)"; g.lineWidth=Math.max(1,S); g.strokeRect(x+0.5,y+0.5,bw-1,bh-1);
+  g.fillStyle="rgba(232,228,216,0.92)"; g.fillText(label,x+pad,y+bh/2+0.5);         // light --ink text
+  return off;
+}
+function dataURLToBlob(u){ const p=u.split(","), bstr=atob(p[1]), n=bstr.length, arr=new Uint8Array(n);
+  for(let i=0;i<n;i++) arr[i]=bstr.charCodeAt(i); return new Blob([arr],{type:"image/png"}); }
+// PNG blob via toBlob, with a toDataURL fallback for engines lacking toBlob.
+function shareBlob(){ return new Promise((resolve)=>{ const c=shareCaptureClean();
+  if(c.toBlob){ c.toBlob(b=>resolve(b||dataURLToBlob(c.toDataURL("image/png"))),"image/png"); }
+  else resolve(dataURLToBlob(c.toDataURL("image/png"))); }); }
+function downloadBlob(blob,name){ const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),4000); }
+// post to X: save the PNG (an intent URL cannot carry an image) then open a prefilled tweet.
+async function shareToX(){ try{ const blob=await shareBlob(); downloadBlob(blob,shareFilename());
+    const text="day "+shareDayNum()+" of my agentcity — my work builds a city 🏙️  npx agentcity";
+    window.open("https://twitter.com/intent/tweet?text="+encodeURIComponent(text));
+    shareNotice("image saved — attach it to your post"); }
+  catch(_){ shareNotice("could not build image"); } }
+// copy for Slack: clipboard image; fall back to a download when the Clipboard API is unavailable.
+async function shareToSlack(){ let blob; try{ blob=await shareBlob(); }catch(_){ shareNotice("could not build image"); return; }
+  try{ if(!navigator.clipboard||!navigator.clipboard.write||typeof ClipboardItem==="undefined") throw new Error("no clipboard");
+    await navigator.clipboard.write([new ClipboardItem({"image/png":blob})]); shareNotice("copied — paste into Slack (⌘V)"); }
+  catch(_){ downloadBlob(blob,shareFilename()); shareNotice("clipboard unavailable — image saved instead"); } }
+// save PNG: plain download.
+async function shareSavePNG(){ try{ const blob=await shareBlob(); downloadBlob(blob,shareFilename()); shareNotice("image saved"); }
+  catch(_){ shareNotice("could not build image"); } }
+// popover: outside-click / Escape / after-action all close it; buttons are real <button>s (keyboard-accessible).
+function shareOpen(){ return $("sharePop").classList.contains("open"); }
+function setSharePop(open){ const p=$("sharePop"), b=$("shareBtn"); if(!p||!b) return;
+  p.classList.toggle("open",open); b.classList.toggle("on",open); b.setAttribute("aria-expanded",open?"true":"false");
+  if(open){ const f=p.querySelector(".sh"); if(f) f.focus(); } }
+$("shareBtn").addEventListener("click",()=>setSharePop(!shareOpen()));
+$("shareX").addEventListener("click",()=>{ setSharePop(false); shareToX(); });
+$("shareSlack").addEventListener("click",()=>{ setSharePop(false); shareToSlack(); });
+$("sharePng").addEventListener("click",()=>{ setSharePop(false); shareSavePNG(); });
+document.addEventListener("pointerdown",(e)=>{ if(!shareOpen()) return; const p=$("sharePop"), b=$("shareBtn");
+  if(!p.contains(e.target) && e.target!==b && !b.contains(e.target)) setSharePop(false); });
+window.addEventListener("keydown",(e)=>{ if(e.key==="Escape" && shareOpen()){ setSharePop(false); $("shareBtn").focus(); } });
+
 // ---- INFORMATION LOG: newest-on-top, day/time-stamped, capped, filterable ----
 const LOGCAP=200;
 const lotRepoMap=Object.create(null);
@@ -1294,6 +1388,7 @@ setMode("live");
   if(q.has("bright")) setBright(q.get("bright"));         // ?bright=auto|day|dusk|brightnight
   if(q.has("menu")) setDrawer(q.get("menu")!=="0");       // ?menu / ?menu=0 — force left drawer
   if(q.has("log")) setLogDrawer(q.get("log")!=="0");      // ?log  / ?log=0  — force info log
+  if(q.has("share")) setSharePop(q.get("share")!=="0");   // ?share — open the share popover on load (debug/screenshots)
 })();
 // CAMERA SANITY (item 3): always fit-all to the BUILT city on load — never open
 // on empty fog — even when a ?rot/?day deep-link is present.
@@ -1410,6 +1505,17 @@ if(SELFTEST){
       shipsOK = allW && startsAtDock && endEdgeOK && simOnWater;
     }
     res.checks.shipsOnWater = shipsOK;
+    // 14) SHARE capture: build the beauty shot offscreen (canvas + watermark + toDataURL); assert a
+    //     non-trivial PNG dataURL and no throw. Also assert the share button + popover exist and the
+    //     popover toggles. NEVER triggers window.open / downloads / clipboard.
+    setMode("live"); render();
+    try{
+      const cap=shareCaptureClean(); const durl=cap.toDataURL("image/png");
+      res.checks.shareDataURLLen=durl.length;
+      const btnOK=!!$("shareBtn") && !!$("sharePop") && $("sharePop").querySelectorAll(".sh").length===3;
+      setSharePop(true); const opened=shareOpen(); setSharePop(false); const closed=!shareOpen();
+      res.checks.shareCaptureClean = durl.indexOf("data:image/png")===0 && durl.length>10000 && btnOK && opened && closed;
+    }catch(e){ res.checks.shareCaptureClean=false; res.checks.shareThrew=String(e&&e.message||e); }
     res.errors=errors.slice();
     res.ok = res.checks.foldEqualsModel && res.checks.fullRevealModel && res.checks.fullRevealFold
       && res.checks.grassColorLive
@@ -1421,6 +1527,7 @@ if(SELFTEST){
       && res.checks.sheepOnGrass
       && res.checks.shipsOnWater
       && res.checks.activityInjectClean
+      && res.checks.shareCaptureClean
       && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);
