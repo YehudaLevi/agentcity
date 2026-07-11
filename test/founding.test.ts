@@ -6,10 +6,11 @@ import { get } from "node:http";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
-import { boot, poll, foundFromEvents, refound, type Sources } from "../src/founding.js";
-import { readCheckpoint, readArchive, paths } from "../src/persist.js";
-import { fold } from "../src/compiler.js";
-import { generateDemoEvents } from "../src/demo-events.js";
+import { boot, foundFromEvents, refound, localHandle, type Sources } from "../src/founding.js";
+import { readArchive, paths, writeConfig, readConfig } from "../src/persist.js";
+import { renderCity } from "../src/compiler.js";
+import { gamify } from "../src/gamified/gamify.js";
+import { generateDemoEvents, demoResolver } from "../src/demo-events.js";
 import { stableStringify } from "../src/types.js";
 import type { PixelEvent } from "../src/types.js";
 
@@ -17,12 +18,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, "..");
 
 const SEED = "found-seed";
-// A full 90-day demo stream, split into two batches on a clean day boundary so
-// the second boot must fold ONLY the newer events off the checkpoint.
+const HANDLE = "tester";
+// A full 90-day demo stream, split on a clean day boundary so a resume/poll must
+// APPEND only the newer days.
 const ALL = generateDemoEvents(SEED);
 const CUT = "2026-05-16T00:00:00.000Z";
 const BATCH1 = ALL.filter((e) => e.ts < CUT);
-const BATCH2 = ALL.filter((e) => e.ts >= CUT);
 
 let root: string;
 let paDir: string; // pixelagents source dir
@@ -33,6 +34,13 @@ function writeEvents(events: PixelEvent[]): void {
 }
 function sources(): Sources {
   return { historyDir: histDir, pixelagentsDir: paDir };
+}
+const opts = { seed: SEED, handle: HANDLE, resolve: demoResolver };
+
+// Oracle: the deterministic city for a raw event set, straight through the
+// shared pipeline (gamify -> renderCity), machine-independent via demoResolver.
+function oracle(events: PixelEvent[]): string {
+  return stableStringify(renderCity(gamify(events, demoResolver, HANDLE), SEED).model);
 }
 
 beforeEach(() => {
@@ -46,72 +54,116 @@ afterEach(() => {
 });
 
 describe("founding flow", () => {
-  it("founds a fresh city end-to-end: checkpoint + archive + deltas written, valid bundle", () => {
+  it("founds a fresh city end-to-end: archive written, valid bundle, treehouses present", () => {
     writeEvents(BATCH1);
-    const res = boot(root, sources(), { seed: SEED });
+    const city = boot(root, sources(), opts);
 
-    expect(res.founded).toBe(true);
+    expect(city.founded).toBe(true);
     const p = paths(root);
-    expect(existsSync(p.checkpoint)).toBe(true);
-    expect(existsSync(p.deltas)).toBe(true);
     expect(readdirSync(p.archiveDir).some((f) => f.endsWith(".jsonl.gz"))).toBe(true);
-
     // archive holds the raw ingested events (rule 4)
     expect(readArchive(root).length).toBe(BATCH1.length);
-    // served bundle is a valid CityModel + delta log
-    expect(res.model.version).toBe(1);
-    expect(res.model.lots.length).toBeGreaterThan(0);
-    expect(res.deltas.length).toBeGreaterThan(0);
-    expect(res.deltas[0]!.kind).toBe("baseline.init");
+
+    const model = city.model();
+    expect(model.version).toBe(1);
+    expect(model.lots.length).toBeGreaterThan(0);
+    expect(city.deltas().length).toBeGreaterThan(0);
+    expect(city.deltas()[0]!.kind).toBe("baseline.init");
+    // the demo stream carries no-remote workspaces -> the city has treehouses.
+    expect(model.lots.some((l) => l.personal === true)).toBe(true);
+    expect(model.lots.some((l) => l.personal !== true)).toBe(true);
+    // the served model is exactly the shared-pipeline oracle.
+    expect(stableStringify(model)).toBe(oracle(BATCH1));
   });
 
-  it("incremental restart: second boot resumes the checkpoint and folds ONLY new events", () => {
+  it("restart resumes the archive and re-folds ALL history (append)", () => {
     writeEvents(BATCH1);
-    const first = boot(root, sources(), { seed: SEED });
-    const cpAfterFirst = readCheckpoint(root)!;
-    expect(cpAfterFirst.upToTs).toBe(BATCH1[BATCH1.length - 1]!.ts);
+    const first = boot(root, sources(), opts);
 
-    // more activity arrives; a fresh boot must use the checkpoint, not re-found
+    // more activity arrives; a fresh boot resumes from the archive, not re-founds.
     writeEvents(ALL);
-    const second = boot(root, sources(), { seed: SEED });
+    const second = boot(root, sources(), opts);
     expect(second.founded).toBe(false);
-    expect(second.model.day).toBeGreaterThan(first.model.day);
-
-    // incremental result is byte-identical to a full fold of everything
-    const full = fold(ALL, SEED).model;
-    expect(stableStringify(second.model)).toBe(stableStringify(full));
+    expect(second.model().day).toBeGreaterThan(first.model().day);
+    // resumed city == a from-scratch render of everything (fold purity).
+    expect(stableStringify(second.model())).toBe(oracle(ALL));
   });
 
-  it("poll returns only the newly-produced deltas after the checkpoint", () => {
+  it("poll reconciles new activity and is a no-op when nothing changed", () => {
     writeEvents(BATCH1);
-    boot(root, sources(), { seed: SEED });
-    // committed frontier after founding = last COMPLETE day (state.day). The
-    // final day of batch1 is still "open" (re-derived from pending), so poll
-    // finalizes it and everything after — all strictly past this frontier.
-    const frontier = readCheckpoint(root)!.state.day;
+    const city = boot(root, sources(), opts);
 
-    // no new events yet
-    expect(poll(root, sources())).toBeNull();
+    // nothing new yet
+    expect(city.poll()).toBeNull();
 
     writeEvents(ALL);
-    const p = poll(root, sources())!;
+    const p = city.poll()!;
     expect(p).not.toBeNull();
-    expect(p.newDeltas.length).toBeGreaterThan(0);
-    // every pushed delta is dated on a day past the committed frontier
-    expect(Math.min(...p.newDeltas.map((d) => d.day as number))).toBeGreaterThan(frontier);
-    // and a subsequent poll with nothing new is a no-op
-    expect(poll(root, sources())).toBeNull();
+    expect(p.deltas.length).toBeGreaterThan(0);
+    // BATCH2 founds new harbor (api) repos that carve inlets, back-patching the
+    // day-0 geography — a legitimate refold. Either way the live city is exactly
+    // the full-render oracle (clean append is covered in gamified-city.test).
+    expect(stableStringify(city.model())).toBe(oracle(ALL));
+    // a subsequent poll with nothing new is a no-op
+    expect(city.poll()).toBeNull();
   });
 
-  it("refound rebuilds byte-identically from archives + sources", () => {
+  it("refound rebuilds byte-identically from archive + sources", () => {
     writeEvents(ALL);
-    const first = boot(root, sources(), { seed: SEED });
-    // wipe derived state, keep archives, rebuild
-    const p = paths(root);
-    rmSync(p.checkpoint, { force: true });
-    rmSync(p.deltas, { force: true });
-    const re = refound(root, sources(), { seed: SEED });
-    expect(stableStringify(re.model)).toBe(stableStringify(first.model));
+    const first = boot(root, sources(), opts);
+    const re = refound(root, sources(), opts);
+    expect(stableStringify(re.model)).toBe(stableStringify(first.model()));
+  });
+
+  it("refound PRESERVES federation config + a non-default historyInfluence", () => {
+    writeEvents(BATCH1);
+    boot(root, sources(), opts);
+    // a user configures federation + a capped influence
+    writeConfig(root, {
+      seed: SEED,
+      historyInfluence: "capped",
+      aliases: {},
+      federation: { role: "client", centralUrl: "http://hub:4243", handle: "alice" },
+    });
+    refound(root, sources(), { seed: SEED, handle: HANDLE, resolve: demoResolver });
+    const cfg = readConfig(root);
+    expect(cfg.federation?.centralUrl).toBe("http://hub:4243"); // not wiped
+    expect(cfg.federation?.handle).toBe("alice");
+    expect(cfg.historyInfluence).toBe("capped"); // preserved, not reset to "full"
+  });
+});
+
+describe("localHandle precedence + sanitization", () => {
+  let r: string;
+  beforeEach(() => (r = mkdtempSync(join(tmpdir(), "agentcity-h-"))));
+  afterEach(() => rmSync(r, { recursive: true, force: true }));
+
+  it("override (--handle) beats config, which beats $USER", () => {
+    const prevUser = process.env.USER;
+    try {
+      process.env.USER = "alice";
+      expect(localHandle(r)).toBe("alice"); // $USER default
+      writeConfig(r, { seed: "s", historyInfluence: "full", aliases: {}, federation: { handle: "bob" } });
+      expect(localHandle(r)).toBe("bob"); // config wins over $USER
+      expect(localHandle(r, "carol")).toBe("carol"); // explicit override wins over all
+    } finally {
+      if (prevUser === undefined) delete process.env.USER;
+      else process.env.USER = prevUser;
+    }
+  });
+
+  it("sanitizes to a scene-safe token and falls back to 'user'", () => {
+    expect(localHandle(r, "Jane Doe!")).toBe("Jane-Doe");
+    const prevUser = process.env.USER;
+    const prevLog = process.env.LOGNAME;
+    try {
+      delete process.env.USER;
+      delete process.env.LOGNAME;
+      expect(localHandle(r)).toBe("user"); // nothing usable -> "user"
+    } finally {
+      if (prevUser !== undefined) process.env.USER = prevUser;
+      if (prevLog !== undefined) process.env.LOGNAME = prevLog;
+    }
   });
 });
 
@@ -126,7 +178,6 @@ describe("--demo isolation", () => {
       stdio: "ignore",
     });
     try {
-      // wait for the server to come up
       let up = false;
       for (let i = 0; i < 40 && !up; i++) {
         await sleep(150);
@@ -149,9 +200,9 @@ describe("--demo isolation", () => {
   it("foundFromEvents writes only under the given root", () => {
     const demoRoot = mkdtempSync(join(tmpdir(), "agentcity-demoroot-"));
     try {
-      const res = foundFromEvents(demoRoot, generateDemoEvents("demo"), "demo");
+      const res = foundFromEvents(demoRoot, generateDemoEvents("demo"), "demo", { resolve: demoResolver });
       expect(res.founded).toBe(true);
-      expect(existsSync(paths(demoRoot).checkpoint)).toBe(true);
+      expect(readdirSync(paths(demoRoot).archiveDir).some((f) => f.endsWith(".jsonl.gz"))).toBe(true);
       expect(res.model.lots.length).toBeGreaterThan(0);
     } finally {
       rmSync(demoRoot, { recursive: true, force: true });

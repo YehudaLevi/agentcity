@@ -5,7 +5,6 @@ import type { HistoryInfluence } from "../types.js";
 // Cumulative WU thresholds per tier (index = tier).
 // 0 tent, 1 hut, 2 house, 3 workshop, 4 tower, 5 landmark.
 export const TIER_THRESHOLDS = [0, 25, 90, 250, 700, 1800] as const;
-export const TIER_NAMES = ["tent", "hut", "house", "workshop", "tower", "landmark"] as const;
 export const MAX_TIER = 5;
 
 /** Raw tier from cumulative WU (uncapped). */

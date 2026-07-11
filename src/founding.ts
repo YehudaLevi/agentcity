@@ -1,37 +1,29 @@
-// agentcity — the founding flow (wave 2). Turns raw agent activity into a
-// served, persistent city and keeps it live:
+// agentcity — the founding flow. Turns raw agent activity into a served,
+// persistent city and keeps it live, via the ONE shared pipeline:
 //
-//   FOUND (no checkpoint in root): ingest claude-history + pixelagents logs,
-//     merge+sort, archive the raw events (rule 4: never pruned), full fold,
-//     write checkpoint + deltas.jsonl + config, hand back the founding bundle.
-//   INCREMENTAL (checkpoint present): ingest only events strictly after the
-//     checkpoint's upToTs, archive them, foldIncremental, append the new
-//     deltas, update the checkpoint, hand back {model, full delta log}.
-//   POLL: one incremental step on demand (the server calls this on a timer);
-//     returns just the newly-produced deltas so the server can push them.
+//   ingest raw PixelEvents  →  gamify (privacy firewall + economy + git identity)
+//   →  GamifiedCity (fold + append/refold reconciliation)  →  {model, deltas}
 //
-// Everything is injectable (sources, seed, clock-free) so tests never read a
-// real home dir or hit the network.
+// The raw event archive is the source of truth (rule 4: never pruned); the city
+// is a pure function of it, re-derivable forever. A boot re-gamifies the whole
+// archive (historic fold); each poll re-gamifies and reconciles day-granularly
+// (broadcast only the days that changed). Local and central share GamifiedCity,
+// so reconciliation is identical on both sides.
+//
+// Everything is injectable (sources, seed, resolver, handle) so tests never read
+// a real home dir or hit the network.
 
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import type { PixelEvent, CityConfig, Checkpoint, CityModel, CityDelta } from "./types.js";
-import { fold, foldIncremental } from "./compiler.js";
+import { join } from "node:path";
+import type { PixelEvent, CityConfig, CityModel, CityDelta } from "./types.js";
 import { parseClaudeHistory } from "./ingest/claude-history.js";
 import { parsePixelagentsLog } from "./ingest/pixelagents-log.js";
-import {
-  readCheckpoint,
-  writeCheckpoint,
-  appendDeltas,
-  readDeltas,
-  archiveEvents,
-  readArchive,
-  readConfig,
-  writeConfig,
-  paths,
-} from "./persist.js";
+import { archiveEvents, readArchive, readConfig, writeConfig } from "./persist.js";
 import { deriveSeed } from "./seed.js";
+import { gamify, type IdentityResolver } from "./gamified/gamify.js";
+import { createIdentityResolver, pathIndex } from "./gamified/identity.js";
+import { GamifiedCity, type IngestResult } from "./gamified/city.js";
+import type { GamifiedEvent } from "./gamified/types.js";
 
 export interface Sources {
   /** claude-code transcripts dir (default ~/.claude/projects). */
@@ -52,17 +44,22 @@ export function ingestSources(sources: Sources): PixelEvent[] {
   const events: PixelEvent[] = [];
   events.push(...parseClaudeHistory(sources.historyDir));
   events.push(...parsePixelagentsLog(sources.pixelagentsDir));
-  events.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  return events;
+  return sortEvents(events);
+}
+
+function sortEvents(events: PixelEvent[]): PixelEvent[] {
+  return events.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+}
+
+/** Stable identity key for de-duping raw events across archive + live. */
+function eventKey(e: PixelEvent): string {
+  return `${e.ts}|${e.session}|${e.kind}|${e.repo}|${e.tool ?? ""}|${e.detail ?? ""}`;
 }
 
 /** Resolve the persistent seed: explicit override wins, then config, else a
  * machine+user derived stable seed. Persisted on found so resumes never drift. */
 function resolveSeed(root: string, override?: string): string {
   const cfg = readConfig(root);
-  // An EXPLICIT override (refound --seed) always wins over the pinned config
-  // seed — otherwise a user can never change their city's geography. found()
-  // persists the resolved seed back to config, so the new choice sticks.
   if (override) return override;
   if (cfg.seed) return cfg.seed;
   // deriveSeed is deterministic given machine+user; keep it out of the compiler
@@ -70,193 +67,176 @@ function resolveSeed(root: string, override?: string): string {
   return deriveSeed(process.env.AGENTCITY_MACHINE ?? "agentcity", process.env.USER ?? "user");
 }
 
-export interface BootResult {
-  founded: boolean; // true if this boot founded a fresh city
-  model: CityModel;
-  deltas: CityDelta[]; // FULL delta log (timelapse source for the served bundle)
-  checkpoint: Checkpoint;
-  upToTs: string;
+/** Sanitize a handle to a compact scene-safe token (the shared calendar shows it
+ * and it namespaces per-user tiles). Falls back to "user" if nothing usable. */
+function cleanHandle(raw: string | undefined): string {
+  const h = (raw ?? "").trim().replace(/\s+/g, "-").replace(/[^A-Za-z0-9._-]/g, "");
+  return h.slice(0, 32) || "user";
+}
+
+/**
+ * The one contributor handle (stamped as the gamified `by` AND the federation
+ * batch handle — they must match). Precedence: explicit override (--handle) >
+ * config.federation.handle > $USER > "user". No anonymous hash: the handle is a
+ * chosen display name; a user who wants anonymity sets one explicitly.
+ */
+export function localHandle(root: string, override?: string): string {
+  if (override) return cleanHandle(override);
+  const cfg = readConfig(root);
+  if (cfg.federation?.handle) return cleanHandle(cfg.federation.handle);
+  return cleanHandle(process.env.USER ?? process.env.LOGNAME);
 }
 
 export interface FoundOptions {
   seed?: string; // explicit override (CLI --seed); beats config.seed and is persisted
   config?: Partial<CityConfig>;
+  handle?: string; // contributor handle stamped on the stream (default: localHandle)
+  /** Identity resolver override (demo/tests inject a synthetic one). Default:
+   * the real git-discovery resolver over the events' cwds. */
+  resolve?: IdentityResolver;
 }
 
-/** Full fold from an explicit event list. Archives, writes checkpoint + deltas
- * + config. Shared by found() and the --demo path (which supplies demo events). */
+/** Gamify a raw stream into the shared gamified event stream. */
+function streamOf(events: PixelEvent[], handle: string, resolve?: IdentityResolver): ReturnType<typeof gamify> {
+  const resolver = resolve ?? createIdentityResolver(pathIndex(events));
+  return gamify(events, resolver, handle);
+}
+
+/** Persist config, PRESERVING existing fields (federation, and any prior
+ * influence/aliases) — writeConfig overwrites wholesale, so boot/refound/found
+ * must all merge through here or a re-found silently wipes federation setup. */
+function persistConfig(root: string, seed: string, config?: Partial<CityConfig>): void {
+  const prev = readConfig(root);
+  writeConfig(root, {
+    seed,
+    historyInfluence: config?.historyInfluence ?? prev.historyInfluence ?? "full",
+    aliases: config?.aliases ?? prev.aliases ?? {},
+    ...(prev.federation ? { federation: prev.federation } : {}),
+  });
+}
+
+export interface BootResult {
+  founded: boolean; // true if this boot founded a fresh city (empty prior archive)
+  model: CityModel;
+  deltas: CityDelta[]; // FULL delta timeline (the served bundle / timelapse source)
+}
+
+/**
+ * A live local city: holds the folded GamifiedCity AND the raw events + resolver
+ * across the server's poll loop. `poll()` ingests only NEW raw events (never
+ * re-decompressing the whole archive) and re-gamifies with a CACHED resolver (so
+ * git is queried once per repo, not per poll), then reconciles. Returns the
+ * day-granular reconciliation, or null when nothing is new.
+ */
+export class LocalCity {
+  readonly founded: boolean;
+  private lastArchivedTs: string;
+  constructor(
+    private readonly root: string,
+    private readonly sources: Sources,
+    private readonly handle: string,
+    private readonly resolve: IdentityResolver,
+    private readonly pathFor: Map<string, string>,
+    private readonly events: PixelEvent[], // in-memory raw log (grows on poll)
+    private readonly city: GamifiedCity,
+    founded: boolean,
+    lastArchivedTs: string
+  ) {
+    this.founded = founded;
+    this.lastArchivedTs = lastArchivedTs;
+  }
+
+  model(): CityModel {
+    return this.city.model();
+  }
+  deltas(): CityDelta[] {
+    return this.city.deltas();
+  }
+  /** The gamified stream (what the federation client forwards to the hub). */
+  stream(): GamifiedEvent[] {
+    return this.city.all();
+  }
+
+  poll(): (IngestResult & { newEvents: PixelEvent[] }) | null {
+    const fresh = ingestSources(this.sources).filter((e) => e.ts > this.lastArchivedTs);
+    if (!fresh.length) return null;
+    archiveEvents(this.root, fresh);
+    this.lastArchivedTs = fresh[fresh.length - 1]!.ts;
+    for (const e of fresh) {
+      if (e.cwd) this.pathFor.set(e.repo, e.cwd); // feed the cached resolver new repos
+      this.events.push(e);
+    }
+    const res = this.city.reconcile(gamify(this.events, this.resolve, this.handle));
+    return { ...res, newEvents: fresh };
+  }
+}
+
+/** Build the identity resolver over a mutable repo->cwd map (so newly-seen repos
+ * resolve as they arrive) — or the injected one (demo/tests). */
+function makeResolver(pathFor: Map<string, string>, injected?: IdentityResolver): IdentityResolver {
+  return injected ?? createIdentityResolver((repo) => pathFor.get(repo));
+}
+
+/** Boot a local city: ingest sources, merge with the archive, gamify, fold.
+ * Founds fresh when the archive was empty; otherwise resumes all history. */
+export function boot(root: string, sources: Sources, opts: FoundOptions = {}): LocalCity {
+  const seed = resolveSeed(root, opts.seed);
+  const handle = localHandle(root, opts.handle);
+  const prior = readArchive(root);
+  const founded = prior.length === 0;
+
+  // merge archive + live, de-dupe, archive only the genuinely new events (rule 4).
+  const seen = new Set(prior.map(eventKey));
+  const live = ingestSources(sources);
+  const fresh = live.filter((e) => !seen.has(eventKey(e)));
+  if (fresh.length) archiveEvents(root, fresh);
+
+  const all = sortEvents([...prior, ...fresh]);
+  const pathFor = new Map<string, string>();
+  for (const e of all) if (e.cwd) pathFor.set(e.repo, e.cwd);
+  const resolve = makeResolver(pathFor, opts.resolve);
+  const cfg: Partial<CityConfig> = opts.config ?? {};
+  const city = new GamifiedCity(seed, { scene: "solo", config: cfg }, gamify(all, resolve, handle));
+
+  persistConfig(root, seed, cfg);
+
+  const lastTs = all.length ? all[all.length - 1]!.ts : "";
+  return new LocalCity(root, sources, handle, resolve, pathFor, all, city, founded, lastTs);
+}
+
+/**
+ * One-shot full fold from an explicit event list (no live loop). Archives the
+ * events, gamifies + folds, persists config. Used by --demo and refound.
+ */
 export function foundFromEvents(
   root: string,
   events: PixelEvent[],
   seed: string,
-  config: Partial<CityConfig> = {}
-): BootResult {
-  const sorted = events.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  const result = fold(sorted, seed, config);
-  archiveEvents(root, sorted);
-  writeCheckpoint(root, result.checkpoint);
-  // fresh deltas.jsonl: replace any stale log with this fold's COMMITTED stream.
-  // The still-open day (re-derived on every resume) is served live via the model
-  // but not persisted, so a later poll appends its final deltas exactly once.
-  writeDeltaLog(root, committedDeltas(result));
-  writeConfig(root, {
-    seed,
-    historyInfluence: config.historyInfluence ?? "full",
-    aliases: config.aliases ?? {},
-  });
-  return {
-    founded: true,
-    model: result.model,
-    deltas: result.deltas,
-    checkpoint: result.checkpoint,
-    upToTs: result.checkpoint.upToTs,
-  };
-}
-
-/** Found a brand-new city by ingesting the live sources. */
-export function found(root: string, sources: Sources, opts: FoundOptions = {}): BootResult {
-  const seed = resolveSeed(root, opts.seed);
-  return foundFromEvents(root, ingestSources(sources), seed, opts.config);
-}
-
-/**
- * Resume an existing city: ingest only events strictly after the checkpoint's
- * upToTs, archive+fold them, append deltas, update the checkpoint. Byte-identical
- * to a full fold over all events (compiler guarantees incremental ≡ full).
- * Returns the full delta log for the served bundle.
- */
-export function incremental(
-  root: string,
-  cp: Checkpoint,
-  sources: Sources,
   opts: FoundOptions = {}
 ): BootResult {
-  const seed = cp.seed;
-  const newEvents = ingestSources(sources).filter((e) => e.ts > cp.upToTs);
-  if (!newEvents.length) {
-    // nothing new — serve the persisted state verbatim.
-    return {
-      founded: false,
-      model: cp.model,
-      deltas: readDeltas(root),
-      checkpoint: cp,
-      upToTs: cp.upToTs,
-    };
-  }
-  const result = foldIncremental(cp, newEvents, opts.config);
-  archiveEvents(root, newEvents);
-  // Persist only days that just became COMPLETE (> the previous committed
-  // frontier, ≤ the new one). The open day is re-derived, so it is never
-  // appended; it reaches the log once a later fold completes it.
-  appendDeltas(root, newlyCommittedDeltas(cp, result));
-  writeCheckpoint(root, result.checkpoint);
-  void seed; // seed is fixed by the checkpoint; resolveSeed not consulted on resume
-  return {
-    founded: false,
-    model: result.model,
-    // full served stream: persisted committed history + this fold's open day.
-    deltas: [...readDeltas(root), ...openDayDeltas(result)],
-    checkpoint: result.checkpoint,
-    upToTs: result.checkpoint.upToTs,
-  };
-}
-
-/** Boot: found if no checkpoint, else incremental. The one call the CLI makes. */
-export function boot(root: string, sources: Sources, opts: FoundOptions = {}): BootResult {
-  const cp = readCheckpoint(root);
-  if (!cp) return found(root, sources, opts);
-  return incremental(root, cp, sources, opts);
-}
-
-export interface PollResult {
-  model: CityModel;
-  newDeltas: CityDelta[];
-  checkpoint: Checkpoint;
-  /** Raw events this poll folded — the server turns these into SSE
-   * "activity" presence messages (birds/flicker); never map state. */
-  newEvents: PixelEvent[];
+  const handle = localHandle(root, opts.handle);
+  const sorted = sortEvents(events);
+  archiveEvents(root, sorted);
+  const stream = streamOf(sorted, handle, opts.resolve);
+  const city = new GamifiedCity(seed, { scene: "solo", config: opts.config }, stream);
+  persistConfig(root, seed, opts.config);
+  return { founded: true, model: city.model(), deltas: city.deltas() };
 }
 
 /**
- * One incremental step for the background live loop. Reads the current
- * checkpoint, folds any events newer than it, persists, and returns ONLY the
- * newly-produced deltas (so the server can push them over SSE). Returns null
- * when there is nothing new or no checkpoint yet.
- */
-export function poll(root: string, sources: Sources, opts: FoundOptions = {}): PollResult | null {
-  const cp = readCheckpoint(root);
-  if (!cp) return null;
-  const newEvents = ingestSources(sources).filter((e) => e.ts > cp.upToTs);
-  if (!newEvents.length) return null;
-  const result = foldIncremental(cp, newEvents, opts.config);
-  archiveEvents(root, newEvents);
-  appendDeltas(root, newlyCommittedDeltas(cp, result));
-  writeCheckpoint(root, result.checkpoint);
-  // Push everything past the previous committed frontier to SSE clients: the
-  // days that just finalized plus the live (still-open) day.
-  const newDeltas = result.deltas.filter((d) => d.day > cp.state.day);
-  return { model: result.model, newDeltas, checkpoint: result.checkpoint, newEvents };
-}
-
-// ============================ delta partitioning (open vs committed) ============================
-//
-// A fold commits only COMPLETE days into checkpoint.state (state.day = openDay-1)
-// and re-derives the open day from checkpoint.pending on every resume. These
-// helpers split a fold's delta stream accordingly so the append-only log never
-// duplicates the re-derived open day.
-
-/** Deltas for days already committed in this result (day ≤ state.day). */
-function committedDeltas(result: { deltas: CityDelta[]; checkpoint: Checkpoint }): CityDelta[] {
-  const frontier = result.checkpoint.state.day;
-  return result.deltas.filter((d) => d.day <= frontier);
-}
-
-/** Deltas for days that became complete in THIS fold (prevFrontier < day ≤ new). */
-function newlyCommittedDeltas(
-  prev: Checkpoint,
-  result: { deltas: CityDelta[]; checkpoint: Checkpoint }
-): CityDelta[] {
-  const frontier = result.checkpoint.state.day;
-  return result.deltas.filter((d) => d.day > prev.state.day && d.day <= frontier);
-}
-
-/** Deltas for the still-open day (day > state.day) — served live, never persisted. */
-function openDayDeltas(result: { deltas: CityDelta[]; checkpoint: Checkpoint }): CityDelta[] {
-  const frontier = result.checkpoint.state.day;
-  return result.deltas.filter((d) => d.day > frontier);
-}
-
-/**
- * Re-found from the permanent archives + current sources (rule 4: the city is
- * re-derivable forever). Callers must wipe the checkpoint/deltas first (see the
- * CLI `refound` command); this rebuilds the full fold and rewrites both.
+ * Re-found from the permanent archive + current sources (rule 4: the city is
+ * re-derivable forever). De-dupes across archive and live, then full-folds.
  */
 export function refound(root: string, sources: Sources, opts: FoundOptions = {}): BootResult {
   const archived = readArchive(root);
-  const live = ingestSources(sources);
-  // de-dupe by identity (archive already holds previously-ingested live events).
-  const seen = new Set<string>();
-  const merged: PixelEvent[] = [];
-  for (const e of [...archived, ...live]) {
-    const k = `${e.ts}|${e.session}|${e.kind}|${e.repo}|${e.tool ?? ""}|${e.detail ?? ""}`;
-    if (seen.has(k)) continue;
-    seen.add(k);
-    merged.push(e);
-  }
+  const seen = new Set(archived.map(eventKey));
+  const fresh = ingestSources(sources).filter((e) => !seen.has(eventKey(e)));
+  if (fresh.length) archiveEvents(root, fresh); // rule 4: never lose a live event
+  const merged = sortEvents([...archived, ...fresh]);
   const seed = resolveSeed(root, opts.seed);
-  return foundFromEvents(root, merged, seed, opts.config);
-}
-
-// deltas.jsonl is normally append-only (persist.appendDeltas). A fresh full
-// fold (found / refound) must REPLACE it, not append onto a stale log — do that
-// via the same atomic tmp+rename persist uses, kept local to avoid widening
-// persist's API surface for other waves.
-function writeDeltaLog(root: string, deltas: CityDelta[]): void {
-  const file = paths(root).deltas;
-  const dir = dirname(file);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const body = deltas.map((d) => JSON.stringify(d)).join("\n") + (deltas.length ? "\n" : "");
-  const tmp = `${file}.tmp-${process.pid}`;
-  writeFileSync(tmp, body);
-  renameSync(tmp, file);
+  const handle = localHandle(root, opts.handle);
+  const stream = streamOf(merged, handle, opts.resolve);
+  const city = new GamifiedCity(seed, { scene: "solo", config: opts.config }, stream);
+  persistConfig(root, seed, opts.config);
+  return { founded: false, model: city.model(), deltas: city.deltas() };
 }

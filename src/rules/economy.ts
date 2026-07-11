@@ -16,20 +16,6 @@ export const PER_REPO_DAILY_CAP = 120;
 export const GLOBAL_DAILY_CAP = 400;
 export const WAREHOUSE_MAX = 60;
 
-/** Per-repo, per-day aggregated activity used by the fold. */
-export interface DayRepoActivity {
-  repo: string;
-  category: Category;
-  secondary: Category | null;
-  tools: number; // completed tool pairs
-  turns: number;
-  forks: number;
-  sessions: number;
-  founding: boolean;
-  allnighter: boolean;
-  sessionIds: string[];
-}
-
 /** Raw WU before caps. */
 export function rawWu(a: {
   tools: number;

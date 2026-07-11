@@ -1,21 +1,9 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  writeCheckpoint,
-  readCheckpoint,
-  appendDeltas,
-  readDeltas,
-  archiveEvents,
-  readArchive,
-  writeConfig,
-  readConfig,
-  paths,
-} from "../src/persist.js";
-import { fold } from "../src/compiler.js";
+import { archiveEvents, readArchive, writeConfig, readConfig, paths } from "../src/persist.js";
 import { generateDemoEvents } from "../src/demo-events.js";
-import { stableStringify } from "../src/types.js";
 
 // NEVER touch the real ~/.agentcity — use an isolated temp root.
 const roots: string[] = [];
@@ -28,26 +16,8 @@ afterEach(() => {
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
 });
 
-describe("persistence (Contract 4)", () => {
+describe("persistence (archive + config)", () => {
   const events = generateDemoEvents("persist-seed").slice(0, 400);
-  const { checkpoint, deltas } = fold(events, "persist-seed");
-
-  it("checkpoint round-trips byte-identically (atomic write)", () => {
-    const root = tmpRoot();
-    writeCheckpoint(root, checkpoint);
-    const back = readCheckpoint(root);
-    expect(back).not.toBeNull();
-    expect(stableStringify(back)).toBe(stableStringify(checkpoint));
-  });
-
-  it("deltas append and read back in order", () => {
-    const root = tmpRoot();
-    appendDeltas(root, deltas.slice(0, 5));
-    appendDeltas(root, deltas.slice(5, 10));
-    const back = readDeltas(root);
-    expect(back.length).toBe(10);
-    expect(stableStringify(back)).toBe(stableStringify(deltas.slice(0, 10)));
-  });
 
   it("events archive to monthly gz and read back (never pruned)", () => {
     const root = tmpRoot();
@@ -73,10 +43,8 @@ describe("persistence (Contract 4)", () => {
     expect(c.aliases.repo).toBe("town-1");
   });
 
-  it("reading absent checkpoint/deltas is safe", () => {
+  it("reading an absent archive is safe", () => {
     const root = tmpRoot();
-    expect(readCheckpoint(root)).toBeNull();
-    expect(readDeltas(root)).toEqual([]);
-    expect(existsSync(join(root, "checkpoint.json"))).toBe(false);
+    expect(readArchive(root)).toEqual([]);
   });
 });

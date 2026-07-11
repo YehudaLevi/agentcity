@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import { stableStringify } from "../src/types.js";
 import type { PixelEvent } from "../src/types.js";
 
@@ -83,8 +83,8 @@ const SEEDS = ["terra-a", "terra-b", "hills99", "lakeland", "river-x"];
 describe("terrain permanence: geography = f(seed) only", () => {
   it("same seed + wildly different (non-api) event streams => identical terrain", () => {
     for (const seed of SEEDS) {
-      const a = fold(quietStream(), seed).model;
-      const b = fold(busyStream(), seed).model;
+      const a = render(quietStream(), seed).model;
+      const b = render(busyStream(), seed).model;
       // biome identity
       expect(b.biome.kind).toBe(a.biome.kind);
       expect(b.biome.growthDir).toBe(a.biome.growthDir);
@@ -98,8 +98,8 @@ describe("terrain permanence: geography = f(seed) only", () => {
 
   it("api-water carving is additive-only: base water is a subset of carved water", () => {
     for (const seed of SEEDS) {
-      const base = new Set(fold(quietStream(), seed).model.biome.water.map(([x, y]) => `${x},${y}`));
-      const carved = new Set(fold(apiStream(), seed).model.biome.water.map(([x, y]) => `${x},${y}`));
+      const base = new Set(render(quietStream(), seed).model.biome.water.map(([x, y]) => `${x},${y}`));
+      const carved = new Set(render(apiStream(), seed).model.biome.water.map(([x, y]) => `${x},${y}`));
       for (const k of base) expect(carved.has(k)).toBe(true); // carving never removes terrain water
     }
   });
@@ -108,8 +108,8 @@ describe("terrain permanence: geography = f(seed) only", () => {
     for (const seed of SEEDS) {
       const events = busyStream();
       const shuffled = events.slice().reverse(); // fold sorts internally
-      const a = fold(events, seed).model.biome;
-      const b = fold(shuffled, seed).model.biome;
+      const a = render(events, seed).model.biome;
+      const b = render(shuffled, seed).model.biome;
       expect(stableStringify(b)).toBe(stableStringify(a));
     }
   });

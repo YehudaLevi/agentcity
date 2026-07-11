@@ -413,9 +413,9 @@ function fold(list, upto){
       case "chunk.reveal": break;   // full-reveal: not map existence — a "district surveyed" moment (info log + survey-stake foreshadow; chunks already all revealed)
       case "lot.found":{ const lot={id:d.id,repo:d.repo,alias:d.alias,category:d.category,secondary:d.secondary,
         pos:d.pos,tier:d.tier,wu:d.wu,wuIntoTier:d.wuIntoTier,wuNextTier:d.wuNextTier,foundedDay:d.foundedDay,
-        lastActiveDay:d.lastActiveDay,decay:0,underConstruction:false,variant:d.variant};
+        lastActiveDay:d.lastActiveDay,decay:0,underConstruction:false,variant:d.variant,contributors:d.contributors||null,personal:!!d.personal};
         m.lots.push(lot); lotById[lot.id]=lot; break; }
-      case "lot.upgrade":{ const l=lotById[d.id]; if(l){l.tier=d.tier;l.wu=d.wu;l.wuIntoTier=d.wuIntoTier;l.wuNextTier=d.wuNextTier;l.lastActiveDay=d.lastActiveDay;} break; }
+      case "lot.upgrade":{ const l=lotById[d.id]; if(l){l.tier=d.tier;l.wu=d.wu;l.wuIntoTier=d.wuIntoTier;l.wuNextTier=d.wuNextTier;l.lastActiveDay=d.lastActiveDay;if(d.contributors)l.contributors=d.contributors;} break; }
       case "lot.decay":{ const l=lotById[d.id]; if(l) l.decay=d.level; break; }
       case "lot.renovate":{ const l=lotById[d.id]; if(l){l.decay=0;l.lastActiveDay=d.lastActiveDay;} break; }
       case "road.add":{ const r={id:d.id,path:d.path,tier:d.tier}; m.roads.push(r); roadById[d.id]=r; break; }
@@ -454,6 +454,14 @@ function inGrid(x,y){ return x>=0&&y>=0&&x<GRID&&y<GRID; }
 let now=0, animate=!REDUCE;
 let worldSeq=0, tileOrder=[], _drawKey="";   // rotation-aware painter order cache
 
+// ---- federation attribution (only active when lots carry contributors) ----
+// A per-contributor tint over the district palette + tooltip credit, so a shared
+// hub scene reads "who built what". A solo city has no contributors → untouched.
+const CONTRIB_TINTS=["#e07a5f","#81b29a","#f2cc8f","#5f9ed1","#b18cd1","#e09891","#7cb59e","#dbb266","#c98fb0","#6fae8f"];
+function contribTint(handle){ return CONTRIB_TINTS[hashStr(handle)%CONTRIB_TINTS.length]; }
+function tintFam(fam,handle){ const t=contribTint(handle); return Object.assign({},fam,{base:mix(fam.base,t,0.30),roof:mix(fam.roof,t,0.22),trim:mix(fam.trim,t,0.18)}); }
+function contribLine(o){ if(!o.contributors) return ""; const cs=o.contributors, shown=cs.slice(0,3).join(", "), extra=cs.length>3?" +"+(cs.length-3):""; return "<br>by: <b>"+shown+extra+"</b>"; }
+
 function buildWorld(m, isTimelapse){
   const w={ground:[],revealed:new Set(),roadTierAt:{},roadSet:new Set(),roadTiles:[],
     lots:[],props:[],stakes:[],rails:m.rails||[],objs:[],fireworksSpots:[],
@@ -487,15 +495,26 @@ function buildWorld(m, isTimelapse){
   // origin plaza (stone)
   const [ox,oy]=w.origin; if(inGrid(ox,oy)&&w.ground[oy][ox].t!=="water"){ w.ground[oy][ox].t="stone"; const k=ox+","+oy; if(!w.roadSet.has(k)){w.roadSet.add(k);w.roadTiles.push([ox,oy]);} }
   // lots -> building objects
-  for(const l of m.lots){ const o={ id:l.id, name:l.repo, alias:l.alias, repo:l.repo, category:l.category, secondary:l.secondary,
-      tx:l.pos[0], ty:l.pos[1], fw:1, fd:1, elev:0, kind:"building", info:FAM[l.category]||FAM.code,
+  for(const l of m.lots){ const fam=FAM[l.category]||FAM.code;
+    const contribs=(l.contributors&&l.contributors.length)?l.contributors:null;
+    const o={ id:l.id, name:l.repo, alias:l.alias, repo:l.repo, category:l.category, secondary:l.secondary,
+      tx:l.pos[0], ty:l.pos[1], fw:1, fd:1, elev:0, kind:"building", info:contribs?tintFam(fam,contribs[0]):fam,
       tier:l.tier, wu:l.wu, wuIntoTier:l.wuIntoTier, wuNextTier:l.wuNextTier, decay:l.decay, lastActiveDay:l.lastActiveDay,
-      foundedDay:l.foundedDay, seed:(l.variant*2654435761>>>0)%997, oldtown:(l.category==="code"&&l.pos[0]===ox&&l.pos[1]===oy), constructing:0 };
+      foundedDay:l.foundedDay, seed:(l.variant*2654435761>>>0)%997, oldtown:(l.category==="code"&&l.pos[0]===ox&&l.pos[1]===oy), constructing:0,
+      contributors:contribs, personal:!!l.personal };
     w.lots.push(o); w.objs.push(o); }
   // props: baseline hamlet + landmarks
   function addProp(type,pos,extra){ const p=Object.assign({type,tx:pos[0],ty:pos[1],elev:0,kind:"prop"},extra||{}); w.props.push(p); w.objs.push(p); return p; }
-  if(m.baseline){ addProp("house", m.baseline.housePos); for(const p of (m.baseline.props||[])) addProp(p.kind, p.pos); }
+  if(m.baseline&&m.baseline.hamlet!==false){ addProp("house", m.baseline.housePos); for(const p of (m.baseline.props||[])) addProp(p.kind, p.pos); }
   for(const lm of (m.landmarks||[])){ if(lm.kind==="fireworks-spot") w.fireworksSpots.push(lm.pos); else addProp(lm.kind, lm.pos); }
+  // personal treehouses sit in a little grove: scatter a few plain trees on free
+  // neighbouring grass so a treehouse reads as "mixed in among the trees".
+  const treeTaken=new Set(); for(const o of w.lots) treeTaken.add(o.tx+","+o.ty);
+  for(const o of w.lots){ if(!o.personal) continue; let placed=0;
+    for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1],[1,1],[-1,-1],[1,-1],[-1,1]]){ if(placed>=3) break;
+      const tx=o.tx+dx, ty=o.ty+dy, k=tx+","+ty; if(!inGrid(tx,ty)||treeTaken.has(k)||w.roadSet.has(k)) continue;
+      const c=w.ground[ty][tx]; if(c.t!=="grass"&&c.t!=="grass2") continue;
+      if((hashStr(SEED+"grove"+k)%100)<60){ treeTaken.add(k); addProp("tree",[tx,ty]); placed++; } } }
   // dock: a water tile adjacent to an api lot (fallback: first water tile)
   for(const l of m.lots){ if(l.category!=="api") continue; const [x,y]=l.pos;
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]]) if(inGrid(x+dx,y+dy)&&w.ground[y+dy][x+dx].t==="water"){ w.dock=[x+dx,y+dy]; break; } if(w.dock) break; }
@@ -760,6 +779,52 @@ function drawHut(g,o,C,s,cx,cy,dim,night,hf,roofShown){ if(hf==null)hf=1; if(roo
   else o._roofTop={x:cx,y:cy-wallH-2*s};
   drawDecay(g,o,{gL:C.gL,gB:C.gB,gR:C.gR},s,wallH); }
 
+// federation: a per-user WORKSPACE that is NOT a git repo — an isometric little
+// treehouse (built on the tile diamond like every other structure), clearly not
+// a civic building. Grows modestly with tier; keeps the contributor tint.
+function insetDiamond(C,f){ const cx=(C.gL.x+C.gR.x)/2, cy=(C.gT.y+C.gB.y)/2;
+  const L=p=>({x:cx+(p.x-cx)*f,y:cy+(p.y-cy)*f}); return {gL:L(C.gL),gB:L(C.gB),gR:L(C.gR),gT:L(C.gT)}; }
+function drawTreehouse(g,o,C,s,cx,cy,dim,night){ dim=dim||1; night=night||0;
+  const t=Math.max(0,Math.min(5,o.tier||0));
+  const base=o.info.base, roofC=o.info.roof, trim=o.info.trim;
+  const trunkH=(7+t*2.2)*s, R=(6.5+t*1.5)*s, cabinH=(4+t*0.7)*s;
+  const rise=(p,h)=>({x:p.x,y:p.y-h});
+  const crown={x:cx,y:cy-trunkH};
+  const lobe=(dx,dy,r,col)=>{ g.fillStyle=col; g.beginPath(); g.arc(crown.x+dx,crown.y+dy,r,0,7); g.fill(); };
+  g.fillStyle="rgba(0,0,0,.22)"; g.beginPath(); g.ellipse(cx,cy,6*s,2.9*s,0,0,7); g.fill();          // shadow
+  // trunk: a 2-faced iso post from the tile centre up into the canopy
+  const tw=1.7*s, cf={x:cx,y:cy+tw*0.55};
+  poly(g,[{x:cx-tw,y:cy},cf,rise(cf,trunkH),rise({x:cx-tw,y:cy},trunkH)],"#4a3320");
+  poly(g,[cf,{x:cx+tw,y:cy},rise({x:cx+tw,y:cy},trunkH),rise(cf,trunkH)],"#5a3d24");
+  // BACK canopy lobes — rounded crown behind the cabin
+  lobe(-R*0.52,-R*0.02,R*0.68,shade("#2c4824",0.96));
+  lobe( R*0.52,-R*0.04,R*0.64,shade("#2c4824",0.9));
+  lobe( 0,-R*0.52,R*0.64,shade("#345729",1.0));
+  // CABIN nestled up-and-right in the crown (small iso box + hip roof), so its
+  // roof and the right corner poke out while the front leaves hide the rest
+  const M=insetDiamond(C,0.46), lift=trunkH+R*0.1, nx=R*0.24, ny=-R*0.14;
+  const P=p=>({x:p.x+nx,y:p.y-lift+ny});
+  const bL=P(M.gL),bB=P(M.gB),bR=P(M.gR),bT=P(M.gT);
+  const uL=rise(bL,cabinH),uB=rise(bB,cabinH),uR=rise(bR,cabinH),uT=rise(bT,cabinH);
+  poly(g,[bL,bB,uB,uL],shade(base,0.6*dim),"rgba(0,0,0,.35)");
+  poly(g,[bB,bR,uR,uB],shade(base,1.0*dim),"rgba(0,0,0,.25)");
+  { const p=(u,v)=>({x:bB.x+(bR.x-bB.x)*u,y:(bB.y+(bR.y-bB.y)*u)-cabinH*v});                          // window on the exposed wall
+    poly(g,[p(0.34,0.3),p(0.64,0.3),p(0.64,0.62),p(0.34,0.62)],(night>0.4&&!o.decay)?"#ffd98a":shade(base,0.5)); }
+  const apex={x:(uL.x+uR.x)/2,y:(uT.y+uB.y)/2-cabinH*0.95};                                           // hip roof
+  poly(g,[apex,uR,uB],shade(roofC,1.14)); poly(g,[apex,uB,uL],shade(roofC,0.82));
+  poly(g,[apex,uL,uT],shade(roofC,0.96)); poly(g,[apex,uT,uR],shade(roofC,1.22));
+  // FRONT canopy lobes — cover the lower/left of the cabin, leaving roof + right corner out
+  lobe(-R*0.48,R*0.22,R*0.62,shade("#3d6633",1.04));
+  lobe(-R*0.08,R*0.44,R*0.56,shade("#345729",1.0));
+  lobe(-R*0.68,-R*0.12,R*0.52,shade("#437037",1.08));
+  lobe(-R*0.2,-R*0.5,R*0.46,shade("#4b7a3b",1.1));
+  g.fillStyle="rgba(190,225,150,.16)"; g.beginPath(); g.arc(crown.x-R*0.32,crown.y-R*0.34,R*0.32,0,7); g.fill(); // sun-dapple
+  g.strokeStyle="#6a5f45"; g.lineWidth=Math.max(1,s*0.4);                                             // little flag on the roof peak
+  g.beginPath(); g.moveTo(apex.x,apex.y); g.lineTo(apex.x,apex.y-3*s); g.stroke();
+  poly(g,[{x:apex.x,y:apex.y-3*s},{x:apex.x+2.6*s,y:apex.y-2.3*s},{x:apex.x,y:apex.y-1.4*s}],trim);
+  drawDecay(g,o,{gL:C.gL,gB:C.gB,gR:C.gR},s,cabinH);
+  o._roofTop={x:apex.x,y:apex.y-1*s}; }
+
 // organic pixel vines (decay 1) + branching cracks (decay 2)
 function drawDecay(g,o,C,s,h){ if(!o.decay) return; const seed=o.seed, faces=[[C.gL,C.gB],[C.gB,C.gR]];
   g.lineWidth=Math.max(1,s*0.5);
@@ -838,6 +903,8 @@ function paintBox(g,o,C,s,night){
   o._roofTop=null; o._chimney=null; o._smoke=null; o._beacon=null;
   o._flicker=animate&&(o._flickerUntil||0)>now;   // live Edit/Write presence flicker
   if(tier<0||tier>5||!FAM[o.category]) unknownSprites++;
+  // federation: per-user (no-remote) projects render as treehouses, not civic buildings.
+  if(o.personal){ drawTreehouse(g,o,C,s,cxG,cyG,dim,night); return; }
   const st=buildStage(o);
   if(tier<=0){ if(st.foundation) drawFoundation(g,C,s); else drawTent(g,o,C,s,cxG,cyG); o._roofTop={x:cxG,y:cyG-14*s}; if(st.scaffold) drawScaffold(g,C,s); return; }
   if(tier===1){ if(st.foundation){ drawFoundation(g,C,s); o._roofTop={x:cxG,y:cyG-6*s}; } else drawHut(g,o,C,s,cxG,cyG,dim,night,st.hf,st.roofShown); if(st.scaffold) drawScaffold(g,C,s); return; }
@@ -1201,9 +1268,17 @@ let tipVisible=false;
 // tipLot: the building whose tooltip is currently shown (hover OR ?tip pin); null when none.
 // Read by the share-capture hero framing (snapshotted into shareTipLot when the popover opens).
 let tipLot=null;
-function hover(mx,my){ for(let i=world.objs.length-1;i>=0;i--){ const o=world.objs[i]; if(o.kind!=="building"||o.tier===0) continue; const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom); if(pointInPoly(mx,my,[C.gL,C.gB,C.tB,C.tL])||pointInPoly(mx,my,[C.gB,C.gR,C.tR,C.tB])||pointInPoly(mx,my,[C.tT,C.tR,C.tB,C.tL])){ showTip(o,mx,my); return; } } hideTip(); }
+function hover(mx,my){ for(let i=world.objs.length-1;i>=0;i--){ const o=world.objs[i]; if(o.kind!=="building") continue;
+  const C=cornersFor(o.tx,o.ty,o.fw,o.fd,TIER_H[o.tier],o.elev,projWorld,zoom);
+  if(o.personal){ // treehouse: hit the whole tree (canopy overflows the tile box, and tier 0 still counts)
+    const cx=(C.gL.x+C.gR.x)/2, cy=(C.gT.y+C.gB.y)/2, t=Math.max(0,Math.min(5,o.tier||0));
+    const trunkH=(7+t*2.2)*zoom, R=(6.5+t*1.5)*zoom;
+    if(mx>=cx-R*1.15&&mx<=cx+R*1.15&&my>=cy-trunkH-R*1.15&&my<=cy+3*zoom){ showTip(o,mx,my); return; }
+    continue; }
+  if(o.tier===0) continue;
+  if(pointInPoly(mx,my,[C.gL,C.gB,C.tB,C.tL])||pointInPoly(mx,my,[C.gB,C.gR,C.tR,C.tB])||pointInPoly(mx,my,[C.tT,C.tR,C.tB,C.tL])){ showTip(o,mx,my); return; } } hideTip(); }
 function showTip(o,mx,my){ tip.querySelector(".name").textContent=nameOf(o)+(o.oldtown?" (Old Town)":""); tip.querySelector(".dist").textContent=o.info.dist+" · "+o.category+(o.secondary?"+"+o.secondary:"");
-  const idle=(mode==="timelapse"?curDay:MODEL.day)-o.lastActiveDay; tip.querySelector(".meta").innerHTML="tier: <b>"+o.tier+" "+TIER_NAME[o.tier]+"</b> · WU: <b>"+o.wu+"</b><br>last worked: <b>"+(idle<=0?"today":idle+"d ago")+"</b>"+(o.decay?" · <b>"+(o.decay===2?"cracked":"vined")+"</b>":"")+(o.constructing>0?" · <b>building</b>":"");
+  const idle=(mode==="timelapse"?curDay:MODEL.day)-o.lastActiveDay; tip.querySelector(".meta").innerHTML="tier: <b>"+o.tier+" "+TIER_NAME[o.tier]+"</b> · WU: <b>"+o.wu+"</b><br>last worked: <b>"+(idle<=0?"today":idle+"d ago")+"</b>"+(o.decay?" · <b>"+(o.decay===2?"cracked":"vined")+"</b>":"")+(o.constructing>0?" · <b>building</b>":"")+contribLine(o);
   tip.style.display="block"; tipVisible=true; tipLot=o; let x=mx+16,y=my+14; const w=tip.offsetWidth,h=tip.offsetHeight; if(x+w>W-8) x=mx-w-16; if(y+h>H-8) y=my-h-14; tip.style.left=x+"px"; tip.style.top=y+"px"; }
 function hideTip(){ if(tipVisible){ tip.style.display="none"; tipVisible=false; } tipLot=null; }
 
@@ -1219,7 +1294,7 @@ function setMode(m){ mode=m; document.body.classList.toggle("mode-timelapse",m==
 document.querySelectorAll("#modes .seg").forEach(el=>el.addEventListener("click",()=>setMode(el.dataset.m)));
 $("play").addEventListener("click",()=>{ if(curDay>=MAX_DAY){ setDay(0,false); tl.dayFloat=0; } tl.playing=!tl.playing; setPlay(); });
 document.querySelectorAll("#speeds .seg").forEach(el=>el.addEventListener("click",()=>{ tl.speed=+el.dataset.s; document.querySelectorAll("#speeds .seg").forEach(x=>x.classList.toggle("on",x===el)); }));
-$("scrub").addEventListener("input",()=>{ setMode&&null; if(mode!=="timelapse"){ setMode("timelapse"); } tl.playing=false; setPlay(); const v=+$("scrub").value; tl.dayFloat=v; setDay(v,false); });
+$("scrub").addEventListener("input",()=>{ if(mode!=="timelapse"){ setMode("timelapse"); } tl.playing=false; setPlay(); const v=+$("scrub").value; tl.dayFloat=v; setDay(v,false); });
 $("alias").addEventListener("click",()=>{ showRepo=!showRepo; $("alias").textContent="repo names: "+(showRepo?"ON":"OFF"); dirty=true; });
 $("auto").addEventListener("click",()=>{ todAuto=!todAuto; $("auto").classList.toggle("on",todAuto); if(!todAuto) todMinutes=+$("tod").value; dirty=true; });
 $("tod").addEventListener("input",()=>{ todAuto=false; $("auto").classList.remove("on"); todMinutes=+$("tod").value; dirty=true; });
@@ -1403,6 +1478,20 @@ let minions=[];
 function setLive(state){ const d=$("livedot"); if(!d) return; d.classList.toggle("on",state==="connected"); d.title="live feed: "+state; }
 // splice a CityDelta into the live log (sorted) and, if following live view, re-fold + replay its fx
 function applyLiveDelta(d){ if(!d||typeof d.kind!=="string"||typeof d.day!=="number") return;
+  // Day-granular reconciliation: drop deltas dated >= fromDay and splice in the
+  // new tail (append, same-day refresh, and late-join all use this one path).
+  // Dropping first means nothing double-counts; FX fire only for genuinely-new
+  // crossings (days beyond the previous head). Preserve the current view — keep
+  // scrubbing in timelapse, follow the head in live.
+  if(d.kind==="replace"&&Array.isArray(d.deltas)){ const fromDay=d.fromDay||0; const prevMax=MAX_DAY;
+    const kept=DELTAS.filter(x=>x.day<fromDay&&x.kind!=="sync.lots"); // stale terminal sync.lots dropped
+    const tail=d.deltas.slice().sort((a,b)=>(a.day-b.day)||(a.seq-b.seq));
+    DELTAS.length=0; for(const x of kept) DELTAS.push(x); for(const x of tail) DELTAS.push(x);
+    MAX_DAY=DELTAS.length?DELTAS[DELTAS.length-1].day:0; const sc=$("scrub"); if(sc) sc.max=MAX_DAY;
+    if(mode==="timelapse"){ const keep=Math.min(curDay,MAX_DAY); curDay=-1; setDay(keep,false); }
+    else { curDay=MAX_DAY; M=fold(DELTAS,curDay); world=buildWorld(M,false); syncCitizens(M.stats.population,M.stats.pets,M.stats.allNighterYesterday);
+      if(animate) for(const x of tail){ if(x.day>prevMax) onDeltaCrossed(x); } }
+    dirty=true; return; }
   let i=DELTAS.length; while(i>0 && (DELTAS[i-1].day>d.day || (DELTAS[i-1].day===d.day && (DELTAS[i-1].seq||0)>(d.seq||0)))) i--; DELTAS.splice(i,0,d);
   if(d.day>MAX_DAY){ MAX_DAY=d.day; $("scrub").max=MAX_DAY; }
   logDelta(d,"live");

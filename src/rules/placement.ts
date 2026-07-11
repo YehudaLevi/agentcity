@@ -2,8 +2,7 @@
 // affinity, water carving, road A*/BFS, rails, chunk expansion.
 //
 // Determinism: NO RNG stream. Every "random" choice is a pure function of
-// (seed, context-key) via seed.ts helpers, so state rebuilt from a checkpoint
-// makes identical choices as a full fold.
+// (seed, context-key) via seed.ts helpers, so any re-fold makes identical choices.
 
 import type { BiomeKind, GrowthDir, Category, Coord } from "../types.js";
 import { rand, randInt } from "../seed.js";
@@ -204,13 +203,6 @@ function addSandRim(g: Geo): void {
   }
 }
 
-/** Rebuild ground from seed then overlay a known water set (checkpoint resume). */
-export function rebuildTerrain(g: Geo, water: Coord[]): void {
-  genTerrain(g);
-  for (const [x, y] of water) setWater(g, x, y);
-  addSandRim(g);
-}
-
 // ============================ chunk / tile helpers ============================
 
 export function chunkOf(x: number, y: number): { cx: number; cy: number } {
@@ -227,10 +219,6 @@ export function isRevealed(_g: Geo, x: number, y: number): boolean {
 
 export function isWater(g: Geo, x: number, y: number): boolean {
   return inBounds(x, y) && g.ground[y]![x]!.t === "water";
-}
-
-export function heightAt(g: Geo, x: number, y: number): number {
-  return inBounds(x, y) ? g.ground[y]![x]!.elev : 0;
 }
 
 export function tileFree(g: Geo, x: number, y: number): boolean {
@@ -412,10 +400,18 @@ export function clusterCentroid(g: Geo, cat: Category): { x: number; y: number }
   return { x: sx / n, y: sy / n };
 }
 
-/** District-affinity placement: ring search around the category centroid with
- * seeded jitter, scoring same-category adjacency + growth-direction bias. */
-function affinitySpot(g: Geo, cat: Category, kb: string): Coord | null {
-  const cen = clusterCentroid(g, cat);
+/** District-affinity placement: ring search around a center (the category
+ * centroid by default) with seeded jitter, scoring same-category adjacency +
+ * growth-direction bias. `cen`/`fbOrigin` are injectable so a federation hub can
+ * place per-user ring districts around an arbitrary point; the default arguments
+ * reproduce the original behavior byte-for-byte. */
+function affinitySpot(
+  g: Geo,
+  cat: Category,
+  kb: string,
+  cen: { x: number; y: number } = clusterCentroid(g, cat),
+  fbOrigin: { x: number; y: number } = g.origin,
+): Coord | null {
   let best: Coord | null = null;
   let bestScore = -Infinity;
   for (let r = 1; r <= 9; r++) {
@@ -446,8 +442,8 @@ function affinitySpot(g: Geo, cat: Category, kb: string): Coord | null {
       outer: for (let r = 1; r < 26; r++)
         for (let dy = -r; dy <= r; dy++)
           for (let dx = -r; dx <= r; dx++) {
-            const x = g.origin.x + dx;
-            const y = g.origin.y + dy;
+            const x = Math.round(fbOrigin.x) + dx;
+            const y = Math.round(fbOrigin.y) + dy;
             const ok =
               mode === 2 ? lotSiteValid(g, x, y, true)
               : mode === 1 ? lotSiteValid(g, x, y, false)
@@ -505,6 +501,10 @@ export function placeLot(
   const kb = `place:${placeIdx}`;
   const want = affinitySpot(g, cat, kb);
   if (!want) return null;
+  return commitLot(g, cat, want, kb);
+}
+
+function commitLot(g: Geo, cat: Category, want: Coord, kb: string): { pos: Coord } {
   if (cat === "api") ensureWaterNeighbor(g, want, kb);
   g.occupied.add(key(want[0], want[1]));
   g.lotsGeo.push({ x: want[0], y: want[1], cat });

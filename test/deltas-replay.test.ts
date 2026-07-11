@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import { generateDemoEvents } from "../src/demo-events.js";
 import { stableStringify } from "../src/types.js";
 import type { CityDelta, CityModel } from "../src/types.js";
@@ -134,7 +134,7 @@ function lotProjection(m: CityModel) {
 }
 
 describe("deltas replay == model (map state)", () => {
-  const { model, deltas } = fold(generateDemoEvents("replay-seed"), "replay-seed");
+  const { model, deltas } = render(generateDemoEvents("replay-seed"), "replay-seed");
   const r = replay(deltas);
 
   it("lots reconstruct identically (full deep equality incl. wu/progress/lastActiveDay)", () => {
