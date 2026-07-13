@@ -87,6 +87,11 @@ export interface Lot {
   decay: 0 | 1 | 2; // 0 none, 1 vines(30d), 2 cracks(90d)
   underConstruction: boolean;
   variant: number; // hash(repo) -> width/roof/windows
+  // Federation only: contributing handles (sorted). Absent for a solo city.
+  contributors?: string[];
+  // Federation only: a per-user (no-remote) project — rendered as a shack, not a
+  // shared civic building, and never merged across users.
+  personal?: boolean;
 }
 
 export type LandmarkKind = "fountain" | "statue" | "plaque" | "fireworks-spot";
@@ -110,6 +115,9 @@ export interface Baseline {
   housePos: Coord;
   roadPath: Coord[];
   props: { kind: "well" | "tree" | "boat"; pos: Coord }[];
+  // false suppresses the founder cottage + hamlet props (the federation hub has
+  // no single founder). Absent/true keeps the local city's founding hamlet.
+  hamlet?: boolean;
 }
 
 export interface CityModel {
@@ -142,7 +150,11 @@ export type DeltaKind =
   | "landmark.add"
   | "ship.arrive"
   | "population.set"
-  | "sync.lots";
+  | "sync.lots"
+  // Live reconciliation (local + hub): after a re-fold, drop deltas dated
+  // >= `fromDay` and splice in this delta's `deltas`. Subsumes append (fromDay
+  // past the frontier), same-day refresh, and late-join/reset (fromDay 0).
+  | "replace";
 
 export interface CityDelta {
   day: number;
@@ -156,10 +168,20 @@ export interface CityDelta {
 
 export type HistoryInfluence = "full" | "capped";
 
+/** Opt-in federation settings (see docs/federation.md). Absent = disabled. */
+export interface FederationConfig {
+  role?: "client" | "central";
+  /** hub base URL when role=client */
+  centralUrl?: string;
+  /** contributor display name on the shared scene */
+  handle?: string;
+}
+
 export interface CityConfig {
   seed?: string;
   historyInfluence: HistoryInfluence;
   aliases: Record<string, string>;
+  federation?: FederationConfig;
 }
 
 // Internal richer lot/road records (carry fields the model doesn't need but the
@@ -182,6 +204,9 @@ export interface ILot {
   roadId: string | null;
   lastUpgradeDay: number;
   lastRenovateDay: number;
+  // Federation only (absent for a solo city).
+  contributors?: string[];
+  personal?: boolean;
 }
 
 export interface IRoad {
@@ -190,66 +215,6 @@ export interface IRoad {
   tier: number;
   usage: number;
   lotRepo: string | null;
-}
-
-/**
- * Full serialized fold state stored inside the checkpoint so that incremental
- * fold(checkpoint, newEvents) is byte-identical to a full fold. The geometric
- * terrain grid is NOT stored (regenerated from seed + carvedWater on resume).
- */
-export interface SerializedState {
-  ilots: ILot[];
-  iroads: IRoad[];
-  rails: Rail[];
-  railPairs: string[];
-  chunks: Chunk[];
-  landmarks: Landmark[];
-  baseline: Baseline;
-  occupied: string[];
-  roadSet: string[];
-  surveyed: string[]; // chunk keys growth has surveyed (fog-of-war removed)
-  carvedWater: Coord[];
-  warehouse: [string, number][];
-  globalWU: number;
-  nextShipWU: number;
-  shipCount: number;
-  cumTurns: number;
-  cumForks: number;
-  repoCount: number;
-  perDayWU: number[];
-  perDayForks: number[];
-  milestones: { fountain: boolean; statue: boolean; fireworks: boolean; plaque: boolean };
-  allNighterUntilDay: number;
-  sessionRepos: [string, string[]][];
-  seq: number;
-  day: number;
-  foundedTs: string;
-  lotOrder: string[];
-  population: number;
-  pets: number;
-  streak: number;
-  allNighter: boolean;
-}
-
-export interface Checkpoint {
-  version: 1;
-  seed: string;
-  upToTs: string;
-  model: CityModel;
-  state: SerializedState; // internal resumable state (extends the 4-field contract)
-  // Raw events of the still-OPEN day (the highest day index seen). `state` is
-  // committed only through complete days (state.day = openDay - 1); the open
-  // day is re-folded fresh from `pending` on every resume. This keeps day
-  // numbers = calendar diff and makes incremental folds byte-identical to a
-  // full fold even when a checkpoint is taken mid-day (daily caps aggregate a
-  // whole day, so a partially-folded day can never be extended incrementally).
-  pending: PixelEvent[];
-}
-
-export interface FoldResult {
-  model: CityModel;
-  deltas: CityDelta[];
-  checkpoint: Checkpoint;
 }
 
 // ============================ stable-key-order JSON serializer ============================

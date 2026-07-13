@@ -1,11 +1,11 @@
 // agentcity — persistence (Contract 4). Layout under a root (default
 // ~/.agentcity, injectable so tests never touch the real dir):
 //
-//   checkpoint.json                  {version, seed, upToTs, model, state} atomic
-//   deltas.jsonl                     append-only delta log (timelapse source)
-//   archive/events-YYYY-MM.jsonl.gz  ingested raw events (NEVER pruned)
+//   archive/events-YYYY-MM.jsonl.gz  ingested raw events (NEVER pruned) — the
+//                                    city is a pure function of these
 //   album/                           card PNGs (created lazily)
-//   config.json                      {seed?, historyInfluence, aliases}
+//   config.json                      {seed?, historyInfluence, aliases, federation?}
+//   federation.json                  federation push watermark {ts}
 //
 // AGENTS.md rule 4: archive, never prune — the city stays re-derivable forever.
 
@@ -21,7 +21,7 @@ import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { gzipSync, gunzipSync } from "node:zlib";
 import { stableStringify } from "./types.js";
-import type { Checkpoint, CityConfig, CityDelta, PixelEvent } from "./types.js";
+import type { CityConfig, PixelEvent } from "./types.js";
 
 export function defaultRoot(): string {
   return join(homedir(), ".agentcity");
@@ -29,21 +29,19 @@ export function defaultRoot(): string {
 
 export interface Paths {
   root: string;
-  checkpoint: string;
-  deltas: string;
   archiveDir: string;
   albumDir: string;
   config: string;
+  federation: string;
 }
 
 export function paths(root: string): Paths {
   return {
     root,
-    checkpoint: join(root, "checkpoint.json"),
-    deltas: join(root, "deltas.jsonl"),
     archiveDir: join(root, "archive"),
     albumDir: join(root, "album"),
     config: join(root, "config.json"),
+    federation: join(root, "federation.json"),
   };
 }
 
@@ -61,51 +59,6 @@ function atomicWrite(file: string, data: string | Buffer): void {
   const tmp = `${file}.tmp-${process.pid}`;
   writeFileSync(tmp, data);
   renameSync(tmp, file);
-}
-
-// ============================ checkpoint ============================
-
-export function writeCheckpoint(root: string, cp: Checkpoint): void {
-  ensureLayout(root);
-  atomicWrite(paths(root).checkpoint, stableStringify(cp));
-}
-
-export function readCheckpoint(root: string): Checkpoint | null {
-  const file = paths(root).checkpoint;
-  if (!existsSync(file)) return null;
-  try {
-    return JSON.parse(readFileSync(file, "utf8")) as Checkpoint;
-  } catch {
-    return null;
-  }
-}
-
-// ============================ deltas ============================
-
-export function appendDeltas(root: string, deltas: CityDelta[]): void {
-  if (!deltas.length) return;
-  ensureLayout(root);
-  const lines = deltas.map((d) => JSON.stringify(d)).join("\n") + "\n";
-  const file = paths(root).deltas;
-  // append (create if missing)
-  const prev = existsSync(file) ? readFileSync(file, "utf8") : "";
-  atomicWrite(file, prev + lines);
-}
-
-export function readDeltas(root: string): CityDelta[] {
-  const file = paths(root).deltas;
-  if (!existsSync(file)) return [];
-  const out: CityDelta[] = [];
-  for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    try {
-      out.push(JSON.parse(t) as CityDelta);
-    } catch {
-      /* tolerate */
-    }
-  }
-  return out;
 }
 
 // ============================ event archive (monthly gz, never pruned) ============================
@@ -176,4 +129,32 @@ export function readConfig(root: string): CityConfig {
   } catch {
     return { ...DEFAULT_CONFIG };
   }
+}
+
+// ============================ federation cursor ============================
+// The newest gamified-fact ts already forwarded to the hub, so each poll re-sends
+// only the (possibly grown) open day onward (see src/federate.ts). An absolute
+// ts (not a day index) so a shifted stream epoch can't renumber it. Structurally
+// matches federate's Cursor; kept untyped-of-federation to avoid a layer cycle.
+
+export interface FederationState {
+  cursor: { ts: string };
+}
+
+const ZERO_CURSOR = { ts: "" };
+
+export function readFederationState(root: string): FederationState {
+  const file = paths(root).federation;
+  if (!existsSync(file)) return { cursor: { ...ZERO_CURSOR } };
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<FederationState>;
+    return { cursor: parsed.cursor ?? { ...ZERO_CURSOR } };
+  } catch {
+    return { cursor: { ...ZERO_CURSOR } };
+  }
+}
+
+export function writeFederationState(root: string, state: FederationState): void {
+  ensureLayout(root);
+  atomicWrite(paths(root).federation, stableStringify(state));
 }

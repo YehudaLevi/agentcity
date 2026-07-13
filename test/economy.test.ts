@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import {
   rawWu,
   applyRepoCap,
@@ -37,21 +37,16 @@ describe("economy units + caps (unit)", () => {
   });
 });
 
-describe("economy caps (integration through fold)", () => {
+describe("economy caps (integration through gamify -> renderCity)", () => {
   it("a heavy single day never builds more than the per-repo cap", () => {
-    // A trailing event on a later day makes "solo"'s heavy day 0 a COMPLETE day
-    // so it lands in checkpoint.state (the checkpoint commits only whole days;
-    // the still-open last day is re-derived from checkpoint.pending on resume).
-    const { model, checkpoint } = fold([...pairs("solo", 0, 200), ...pairs("other", 2, 1)], "cap1");
+    const { model } = render([...pairs("solo", 0, 200), ...pairs("other", 2, 1)], "cap1");
     const lot = model.lots.find((l) => l.repo === "solo")!;
     expect(lot.wu).toBe(PER_REPO_DAILY_CAP);
-    const wh = new Map(checkpoint.state.warehouse);
-    expect(wh.get("solo")).toBe(WAREHOUSE_MAX);
   });
 
   it("warehouse spends on the next active day", () => {
     const ev = [...pairs("solo", 0, 200), ...pairs("solo", 1, 5)];
-    const { model } = fold(ev, "cap2");
+    const { model } = render(ev, "cap2");
     const lot = model.lots.find((l) => l.repo === "solo")!;
     // day0 raw=200 tools + 2 (session) + 25 (founding) -> spend 120, warehouse 60.
     // day1 raw=5 tools + 2 (session)=7, +60 warehouse -> spend 67 -> 187 cumulative.
@@ -61,7 +56,7 @@ describe("economy caps (integration through fold)", () => {
   it("global daily cap never exceeds 400 across repos", () => {
     const ev: PixelEvent[] = [];
     for (const r of ["a-repo", "b-repo", "c-repo", "d-repo", "e-repo"]) ev.push(...pairs(r, 0, 200));
-    const { model } = fold(ev, "cap3");
+    const { model } = render(ev, "cap3");
     const dayGain = model.lots.reduce((s, l) => s + l.wu, 0);
     expect(dayGain).toBe(GLOBAL_DAILY_CAP);
     for (const l of model.lots) expect(l.wu).toBeLessThanOrEqual(PER_REPO_DAILY_CAP);

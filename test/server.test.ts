@@ -2,12 +2,12 @@ import { describe, it, expect, afterEach } from "vitest";
 import { get, request } from "node:http";
 import { createAgentcityServer, type AgentcityServer, type CityBundle } from "../src/server.js";
 import { parseArgs } from "../src/cli-args.js";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import { generateDemoEvents } from "../src/demo-events.js";
 import type { CityDelta } from "../src/types.js";
 
 function bundle() {
-  const { model, deltas } = fold(generateDemoEvents("srv-seed"), "srv-seed");
+  const { model, deltas } = render(generateDemoEvents("srv-seed"), "srv-seed");
   return { model, deltas };
 }
 
@@ -143,6 +143,22 @@ describe("agentcity server", () => {
     expect(srv.getBundle().deltas.length).toBe(2);
     sse.req.destroy();
   });
+
+  it("SSE: resyncs a (re)connecting client with the current full timeline", async () => {
+    const b = bundle();
+    srv = createAgentcityServer({ bundle: { model: b.model, deltas: b.deltas }, heartbeatMs: 400 });
+    const port = await srv.listen(0);
+
+    const sse = await openSSE(port);
+    await sleep(50);
+    // first thing a connecting client receives is a replace(fromDay:0) carrying
+    // the whole timeline — so a reconnect after a dropped pipe is never stale.
+    expect(sse.buf.text).toContain('"kind":"replace"');
+    expect(sse.buf.text).toContain('"fromDay":0');
+    const frame = JSON.parse(sse.buf.text.split("data: ")[1]!.split("\n\n")[0]!);
+    expect(frame.deltas.length).toBe(b.deltas.length); // the full current bundle
+    sse.req.destroy();
+  });
 });
 
 describe("POST /refound", () => {
@@ -154,7 +170,7 @@ describe("POST /refound", () => {
 
   // A recognizably-different bundle the fake hook swaps in.
   function nextBundle(): CityBundle {
-    const { model, deltas } = fold(generateDemoEvents("swapped-seed"), "swapped-seed");
+    const { model, deltas } = render(generateDemoEvents("swapped-seed"), "swapped-seed");
     return { model, deltas };
   }
 

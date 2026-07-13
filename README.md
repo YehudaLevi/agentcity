@@ -84,6 +84,21 @@ node bin/agentcity.js
 - **Weather** — seeded rain, fog, and snow with the seasons
 - **Hover any building** for its repo, tier, work mix, and last-active day
 
+## Federation (optional)
+
+Local-first by default. Opt in and your city can also feed a shared **hub** — everyone's work merged into one skyline for the office TV.
+
+The hub **never receives your raw events**. Your client forwards only privacy-safe **gamified facts** (per-project work-units, tier, category, contributor) — never paths, commands, or `cwd`. The firewall and the `city = f(events, seed)` determinism hold across the wire.
+
+```bash
+agentcity --central --port 4300         # run the hub (one per team)
+agentcity --federate http://hub:4300    # your client forwards to it
+```
+
+- Same git remote → one **shared building** (every contributor listed); repos without a remote stay private per-user **treehouses**.
+- A late joiner's history slots into its real days — scrub the hub to replay the whole team's rise.
+- You show up as `$USER` by default (`--handle NAME` to change).
+
 ## Under the hood
 
 - TypeScript, Node 20+, **zero runtime dependencies**

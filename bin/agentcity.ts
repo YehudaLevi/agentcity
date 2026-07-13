@@ -7,17 +7,23 @@
 //   (default) serve [--port 4243] [--root DIR] [--history DIR] [--pixelagents DIR] [--seed S]
 //   --demo                     serve the seeded demo city from a throwaway temp
 //                              root — never touches real ~/.claude/~/.agentcity
-//   refound [--seed S] --yes   wipe checkpoint+deltas, re-found from archives+sources
+//   refound [--seed S] --yes   re-found from archives+sources (e.g. a new seed)
 //   compile ...                delegate to the existing `npm run compile` CLI
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultRoot, paths } from "../src/persist.js";
-import { boot, poll, refound, foundFromEvents, defaultSources, type Sources, type BootResult } from "../src/founding.js";
+import { defaultRoot, readConfig, readFederationState, writeFederationState } from "../src/persist.js";
+import { boot, refound, foundFromEvents, localHandle, defaultSources, type Sources, type BootResult } from "../src/founding.js";
+import { demoResolver } from "../src/demo-events.js";
+import { replaceDelta } from "../src/gamified/city.js";
 import { createAgentcityServer, type AgentcityServer, type CityBundle } from "../src/server.js";
 import { generateDemoEvents } from "../src/demo-events.js";
 import { parseArgs, type Args } from "../src/cli-args.js";
+import { createFederator, ZERO_CURSOR, type Federator } from "../src/federate.js";
+import { createHub } from "../src/gamified/hub.js";
+import { FileGamifiedStore } from "../src/gamified/store.js";
+import { compileRules, parseRules } from "../src/federation/mapping.js";
 
 export { parseArgs, type Args };
 
@@ -32,9 +38,9 @@ function sourcesFrom(args: Args): Sources {
   };
 }
 
-async function listenOrExit(server: AgentcityServer, port: number): Promise<number> {
+async function listenOrExit(server: AgentcityServer, port: number, host?: string): Promise<number> {
   try {
-    return await server.listen(port);
+    return await server.listen(port, host);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
       console.error(`port ${port} is already in use — try --port <n>`);
@@ -64,13 +70,41 @@ function installShutdown(cleanup: () => void): void {
   process.on("SIGTERM", shutdown);
 }
 
+/**
+ * Wire opt-in federation (client mode). Returns null when disabled. The client
+ * forwards its already-gamified stream (identity resolved at ingest), so there
+ * is no ref resolver here — nothing but privacy-safe facts leaves the machine.
+ */
+function setupFederation(root: string, args: Args): Federator | null {
+  const cfg = readConfig(root).federation;
+  const url = args.federate ?? (cfg?.role !== "central" ? cfg?.centralUrl : undefined);
+  if (!url) return null;
+  // --refederate: forget how far we've pushed so the next push resends the whole
+  // history (re-seed a hub that lost its store, or re-brand under a new handle).
+  if (args.refederate) {
+    writeFederationState(root, { cursor: { ...ZERO_CURSOR } });
+    console.log("federation: --refederate — resending full history");
+  }
+  // ONE handle: the same localHandle stamped on the local stream's `by`, so the
+  // batch handle and the events' contributor match on the hub.
+  const handle = localHandle(root, args.handle);
+  console.log(`federation: client mode -> ${url} as "${handle}"`);
+  return createFederator({
+    url,
+    handle,
+    loadCursor: () => readFederationState(root).cursor,
+    saveCursor: (c) => writeFederationState(root, { cursor: c }),
+    log: (m) => console.log(m),
+  });
+}
+
 async function serve(args: Args): Promise<void> {
   const root = args.root ?? defaultRoot();
   const sources = sourcesFrom(args);
-  const result = boot(root, sources, { seed: args.seed });
+  const city = boot(root, sources, { seed: args.seed, handle: args.handle });
 
   const server = createAgentcityServer({
-    bundle: { model: result.model, deltas: result.deltas },
+    bundle: { model: city.model(), deltas: city.deltas() },
     // Renderer "generate new map layout" button → recompile from archives with a
     // new seed via the SAME code path as `refound --yes`, then serve the result.
     onRefound: async (seed): Promise<CityBundle> => {
@@ -79,17 +113,24 @@ async function serve(args: Args): Promise<void> {
     },
   });
   const port = await listenOrExit(server, args.port ?? DEFAULT_PORT);
-  announce(port, result.founded);
+  announce(port, city.founded);
 
-  // Background live loop: fold newly-arrived events and push deltas over SSE.
+  const federator = setupFederation(root, args);
+  if (federator) void federator.push(city.stream());
+
+  let liveSeq = 0;
+  const PRESENCE = new Set(["tool.pre", "turn.end", "fork.start", "waiting.human", "waiting.permission", "session.start"]);
+  // Background live loop: re-gamify newly-arrived events and reconcile.
   const timer = setInterval(() => {
     try {
-      const p = poll(root, sources);
+      const p = city.poll();
       if (p) {
-        server.update(p.model, p.newDeltas);
-        // Presence: turn the freshly-folded raw events into activity
-        // messages (birds/flicker layer). Atmosphere only — never map state.
-        const PRESENCE = new Set(["tool.pre", "turn.end", "fork.start", "waiting.human", "waiting.permission", "session.start"]);
+        // Broadcast a map update only when the reconciliation produced deltas.
+        // Day-granular reconciliation: one `replace(fromDay)` the renderer applies
+        // by dropping days >= fromDay and splicing the new tail.
+        if (p.deltas.length) server.replace({ model: p.model, deltas: city.deltas() }, [replaceDelta(p, liveSeq++)]);
+        // Presence: freshly-ingested raw events -> activity messages (birds/
+        // flicker). Atmosphere only — never map state.
         server.pushActivity(
           p.newEvents
             .filter((e) => PRESENCE.has(e.kind))
@@ -97,6 +138,11 @@ async function serve(args: Args): Promise<void> {
             .map((e) => ({ type: "activity" as const, repo: e.repo, kind: e.kind, tool: e.tool })),
         );
       }
+      // ALWAYS attempt a push, even on an idle poll: the federator sends new facts
+      // when there are any, and periodically re-asserts the full backlog (anti-
+      // entropy) — that heartbeat is what detects a recovered/emptied hub and
+      // heals it without local activity.
+      if (federator) void federator.push(city.stream());
     } catch {
       /* a bad poll must never crash the server */
     }
@@ -109,18 +155,65 @@ async function serve(args: Args): Promise<void> {
   });
 }
 
+/** Load hub mapping rules from --rules PATH, else <root>/federation-rules.json. */
+function loadRules(args: Args, root: string): ReturnType<typeof compileRules> {
+  const file = args.rules ?? join(root, "federation-rules.json");
+  if (!existsSync(file)) return [];
+  try {
+    const rules = parseRules(JSON.parse(readFileSync(file, "utf8")));
+    console.log(`federation: loaded ${rules.length} mapping rule(s) from ${file}`);
+    return compileRules(rules);
+  } catch (err) {
+    console.error(`federation: could not read rules ${file} — ${(err as Error).message}`);
+    return [];
+  }
+}
+
+/** Central federation hub: aggregate contributors' gamified events into one
+ * shared scene and serve it. Binds 127.0.0.1 unless --host is given. */
+async function serveCentral(args: Args): Promise<void> {
+  const root = args.root ?? defaultRoot();
+  const seed = args.seed ?? "agentcity-hub";
+  // Persistent append-only log so the hub resumes all history on restart and a
+  // late joiner's backlog re-folds into chronological position (time-travel).
+  const store = new FileGamifiedStore(join(root, "hub-events.jsonl"));
+  const hub = createHub({ seed, rules: loadRules(args, root), store });
+  console.log(`federation: hub store ${join(root, "hub-events.jsonl")} (${store.all().length} facts)`);
+  let hubSeq = 0;
+
+  const server = createAgentcityServer({
+    bundle: { model: hub.model(), deltas: hub.deltas() },
+    onIngest: (batch) => {
+      const res = hub.ingest(batch);
+      if (!res) return;
+      // Day-granular reconciliation: one `replace(fromDay)` covers append,
+      // same-day refresh, and a late joiner's historic backlog alike.
+      server.replace({ model: hub.model(), deltas: hub.deltas() }, [replaceDelta(res, hubSeq++)]);
+      if (hub.dropped() > 0) console.warn(`federation: ${hub.dropped()} project(s) unplaced — the 60x60 world is full`);
+    },
+    onCityAt: (day) => (day === null ? hub.model() : hub.cityAt(day)),
+  });
+
+  const host = args.host ?? "127.0.0.1";
+  const port = await listenOrExit(server, args.port ?? DEFAULT_PORT, host);
+
+  console.log(`agentcity hub listening on http://${host}:${port}`);
+  console.log(`contributors POST gamified events to http://${host}:${port}/ingest`);
+  installShutdown(() => void server.close());
+}
+
 async function serveDemo(args: Args): Promise<void> {
   // A throwaway root so --demo never reads or writes real data (rule 7).
   const root = mkdtempSync(join(tmpdir(), "agentcity-demo-"));
   const seed = args.seed ?? "demo";
-  const result = foundFromEvents(root, generateDemoEvents(seed), seed);
+  const result = foundFromEvents(root, generateDemoEvents(seed), seed, { resolve: demoResolver });
 
   const server = createAgentcityServer({
     bundle: { model: result.model, deltas: result.deltas },
     // Demo refound: regenerate the seeded synthetic city with the new seed into
     // the same throwaway root (never touches real data — rule 7).
     onRefound: async (newSeed): Promise<CityBundle> => {
-      const re = foundFromEvents(root, generateDemoEvents(newSeed), newSeed);
+      const re = foundFromEvents(root, generateDemoEvents(newSeed), newSeed, { resolve: demoResolver });
       return { model: re.model, deltas: re.deltas };
     },
   });
@@ -140,15 +233,13 @@ async function serveDemo(args: Args): Promise<void> {
 
 /**
  * The one refound code path — shared by the CLI `refound --yes` command and the
- * server's POST /refound hook. Wipes the derived state (checkpoint + delta log),
- * leaves the archives untouched (rule 4), and re-founds from archives + sources
- * with the new seed. found()/refound() persists the resolved seed back to config,
- * so a server-triggered refound leaves disk exactly as consistent as a CLI one.
+ * server's POST /refound hook. Re-founds from the archives + sources (rule 4:
+ * archives untouched) with the new seed. refound() persists the resolved seed
+ * back to config, so a server-triggered refound leaves disk consistent with a CLI
+ * one — the city is a pure function of the archive, so there's no derived state
+ * to wipe first.
  */
 function refoundCity(root: string, sources: Sources, seed?: string): BootResult {
-  const p = paths(root);
-  rmSync(p.checkpoint, { force: true });
-  rmSync(p.deltas, { force: true });
   return refound(root, sources, { seed });
 }
 
@@ -184,13 +275,14 @@ export async function main(): Promise<void> {
     return;
   }
   if (args.cmd === undefined || args.cmd === "serve") {
-    if (args.demo) await serveDemo(args);
+    if (args.central) await serveCentral(args);
+    else if (args.demo) await serveDemo(args);
     else await serve(args);
     return;
   }
   console.error(`agentcity: unknown command "${args.cmd}"`);
   console.error(
-    "usage: agentcity [serve] [--demo] [--port N] [--root DIR] [--history DIR] [--pixelagents DIR] [--seed S] | refound --yes | compile ..."
+    "usage: agentcity [serve] [--demo] [--federate URL [--handle NAME] [--refederate]] [--central [--rules F] [--host H]] [--port N] [--root DIR] [--seed S] | refound --yes | compile ..."
   );
   process.exit(1);
 }

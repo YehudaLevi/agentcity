@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import type { PixelEvent } from "../src/types.js";
 
 function activity(repo: string, day: number): PixelEvent[] {
@@ -20,23 +20,24 @@ function activity(repo: string, day: number): PixelEvent[] {
 describe("decay (30/90 day silence) + renovation", () => {
   it("vines at >30 days idle (decay 1)", () => {
     const ev = [...activity("web", 0), ...activity("keepalive", 40)];
-    const { model } = fold(ev, "decay1");
+    const { model } = render(ev, "decay1");
     expect(model.lots.find((l) => l.repo === "web")!.decay).toBe(1);
   });
 
   it("cracks at >90 days idle (decay 2)", () => {
     const ev = [...activity("web", 0), ...activity("keepalive", 100)];
-    const { model } = fold(ev, "decay2");
+    const { model } = render(ev, "decay2");
     expect(model.lots.find((l) => l.repo === "web")!.decay).toBe(2);
   });
 
   it("new WU renovates a decayed lot (decay resets, renovate delta emitted)", () => {
     const ev = [...activity("web", 0), ...activity("keepalive", 100), ...activity("web", 101)];
-    const { model, deltas } = fold(ev, "decay3");
-    expect(model.lots.find((l) => l.repo === "web")!.decay).toBe(0);
-    const webDecays = deltas.filter((d) => d.kind === "lot.decay" && d.id === "h(web)").map((d) => d.level);
+    const { model, deltas } = render(ev, "decay3");
+    const web = model.lots.find((l) => l.repo === "web")!;
+    expect(web.decay).toBe(0);
+    const webDecays = deltas.filter((d) => d.kind === "lot.decay" && d.id === web.id).map((d) => d.level);
     expect(webDecays).toContain(1);
     expect(webDecays).toContain(2);
-    expect(deltas.some((d) => d.kind === "lot.renovate" && d.id === "h(web)")).toBe(true);
+    expect(deltas.some((d) => d.kind === "lot.renovate" && d.id === web.id)).toBe(true);
   });
 });

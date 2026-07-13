@@ -18,13 +18,22 @@ agentcity/
 ├── package.json, tsconfig*, vitest.config.ts   # supervisor scaffold
 ├── src/                                 # ENGINE (Agent A)
 │   ├── types.ts          PixelEvent (shared w/ pixelagents), CityModel,
-│   │                     Lot, CityDelta, Checkpoint, Seed types
+│   │                     Lot, CityDelta, Scene, config/seed types
 │   ├── seed.ts           machine+user → stable seed; hash helpers (fnv/sha)
 │   ├── ingest/
 │   │   ├── claude-history.ts     ~/.claude transcripts → PixelEvent[]
 │   │   │                         (dir injectable; tool_use/tool_result +
 │   │   │                         timestamps + cwd/session mapping)
 │   │   └── pixelagents-log.ts    events.jsonl + archives → PixelEvent[]
+│   ├── gamified/         THE shared contract + pipeline plumbing
+│   │   ├── types.ts      GamifiedEvent (the wire), ProjectId (git|repo|local),
+│   │   │                 tileId/isTreehouse/factKey, coerce (fail-early)
+│   │   ├── gamify.ts     PixelEvent[] → GamifiedEvent[] (privacy firewall +
+│   │   │                 economy caps + git identity) — the only raw-event reader
+│   │   ├── identity.ts   repo → ProjectId via git discovery (cached)
+│   │   ├── city.ts       GamifiedCity: fold + DAY-GRANULAR reconcile {fromDay}
+│   │   ├── store.ts      hub fact store (upsert by factKey, append-only jsonl)
+│   │   └── hub.ts        createHub: merge all contributors → shared city
 │   ├── rules/
 │   │   ├── economy.ts    event→WU, daily caps, warehouse (game-rules §1-2)
 │   │   ├── tiers.ts      thresholds, upgrade/decay checks (§3, §7 decay)
@@ -32,14 +41,17 @@ agentcity/
 │   │   │                 road A*, rails, chunk expansion (§5-6)
 │   │   ├── population.ts citizens/pets/ships rolling windows (§4)
 │   │   └── milestones.ts landmarks (§7)
-│   ├── compiler.ts       fold(events, seed) → {model, deltas} day by day.
-│   │                     PURE. Also incremental: fold(checkpoint, newEvents)
-│   ├── persist.ts        ~/.agentcity layout (injectable root): checkpoint
-│   │                     write/read (atomic), monthly archive gz, album dir
+│   ├── compiler.ts       renderCity(GamifiedEvent[], seed, {scene}) →
+│   │                     {model, deltas}. PURE. The ONE engine (solo + hub).
+│   ├── founding.ts       local server: gamify→GamifiedCity, boot/poll/refound
+│   ├── federate.ts       federation client (forwards the gamified stream)
+│   ├── federation/       gitref (git discovery), mapping (remote aliasing)
+│   ├── persist.ts        ~/.agentcity layout (injectable root): monthly
+│   │                     archive gz (rule 4), config, federation watermark
 │   └── demo-events.ts    seeded synthetic event stream (for --demo & tests)
-├── web/city.html                        # RENDERER (Agent B)
-├── src/server.ts + bin/*                # wave 2 (after A+B land)
-└── test/                                # each agent owns its own tests
+├── web/city.html                        # RENDERER
+├── src/server.ts + bin/*                # HTTP serve + CLI
+└── test/                                # colocated per-subsystem tests
 ```
 
 ## Contract 1: PixelEvent (unchanged from pixelagents)
@@ -94,23 +106,26 @@ Ordered list; renderer replays for the Founding Timelapse and applies live.
 ```json
 {"day":47,"seq":1203,
  "kind":"lot.found|lot.upgrade|lot.decay|lot.renovate|road.add|road.upgrade|
- rail.add|chunk.reveal|landmark.add|ship.arrive|population.set|baseline.init",
+ rail.add|chunk.reveal|landmark.add|ship.arrive|population.set|sync.lots|
+ baseline.init|replace",
  ...kind-specific fields mirroring CityModel fragments}
 ```
 
-`compiler.fold()` returns `{model, deltas}`; incremental folds return only
-new deltas (seq strictly increasing). Determinism: identical (events, seed)
-⇒ byte-identical JSON (stable key order via serializer in types.ts).
+`renderCity()` returns `{model, deltas}`. Live reconciliation is day-granular: a
+`replace{fromDay,deltas}` tells the renderer to drop days ≥ fromDay and splice the
+new tail (subsumes append / same-day / late-join). Determinism: identical
+(events, seed) ⇒ byte-identical JSON (stable key order via serializer in types.ts).
 
 ## Contract 4: persistence (~/.agentcity/, root injectable)
 
 ```
-checkpoint.json        {version, seed, upToTs, model}   atomic tmp+rename
-deltas.jsonl           full delta log (append; source for timelapse)
-archive/events-YYYY-MM.jsonl.gz    ingested raw events (never pruned)
+archive/events-YYYY-MM.jsonl.gz    ingested raw events (never pruned) — the
+                                   city is a pure function of these
 album/*.png
-config.json            {seed?, historyInfluence:"full|capped", aliases:{}}
+config.json            {seed?, historyInfluence:"full|capped", aliases:{}, federation?}
+federation.json        client push watermark {ts}
 ```
+The hub persists its own `hub-events.jsonl` (append-only GamifiedEvent store).
 
 ## Renderer (web/city.html) responsibilities
 
@@ -126,9 +141,10 @@ config.json            {seed?, historyInfluence:"full|capped", aliases:{}}
 
 ## Testing policy
 
-Golden-model: fixture events + seed → committed expected CityModel hash.
-Property: WU caps never exceeded; tier monotonic (except never-decreasing);
-deltas replay ⇒ same model as direct fold; incremental fold ≡ full fold.
+Golden-model: fixture events + seed → committed expected CityModel (byte-exact,
+via gamify→renderCity — the production path). Feature-coverage: the solo demo
+exercises every feature (hamlet, landmarks, tiers, ships, pets, rails, decay).
+Property: WU caps never exceeded; tier monotonic; deltas replay ⇒ same model.
 Renderer: headless-chrome smoke (no console errors, N buildings painted)
 against a fixture model.
 

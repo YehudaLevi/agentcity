@@ -2,8 +2,8 @@
 //
 // Determinism invariant (AGENTS.md rule 2): the compiler NEVER calls
 // Date.now()/Math.random(). All "randomness" here is content-addressed: a value
-// is a pure function of (seed, context-key). There is no running RNG stream to
-// persist, which is what makes incremental fold == full fold trivially exact.
+// is a pure function of (seed, context-key). There is no running RNG stream, so
+// any re-fold of the same events reproduces the same city, trivially exact.
 
 import { createHash } from "node:crypto";
 

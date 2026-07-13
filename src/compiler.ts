@@ -1,14 +1,12 @@
-// agentcity — the compiler. fold(events, seed, config) -> {model, deltas,
-// checkpoint}, day-granular and PURE (no Date.now/Math.random). Also an
-// incremental fold(checkpoint, newEvents) that is byte-identical to a full fold.
+// agentcity — the compiler. renderCity(gamifiedEvents, seed, opts) ->
+// {model, deltas, dropped}, day-granular and PURE (no Date.now/Math.random):
+// the ONE pipeline both the local server (scene "solo") and the federation hub
+// (scene "shared") fold through.
 
 import type {
-  PixelEvent,
   CityConfig,
   CityModel,
   CityDelta,
-  Checkpoint,
-  FoldResult,
   ILot,
   IRoad,
   Rail,
@@ -21,14 +19,9 @@ import type {
   LandmarkKind,
 } from "./types.js";
 import { variantOf, rand } from "./seed.js";
-import {
-  rawWu,
-  applyRepoCap,
-  GLOBAL_DAILY_CAP,
-  dominantCategory,
-  classifyEvent,
-} from "./rules/economy.js";
-import { cappedTier, tierCapFor, tierProgress, TIER_THRESHOLDS } from "./rules/tiers.js";
+import type { GamifiedEvent, ProjectId } from "./gamified/types.js";
+import { tileId, isTreehouse } from "./gamified/types.js";
+import { cappedTier, tierCapFor, tierProgress, TIER_THRESHOLDS, MAX_TIER } from "./rules/tiers.js";
 import { decayLevel } from "./rules/tiers.js";
 import { citizensFor, petsFor, SHIP_PER_WU } from "./rules/population.js";
 import { newMilestones } from "./rules/milestones.js";
@@ -38,7 +31,6 @@ import {
   biomeOf,
   growthDirOf,
   genTerrain,
-  rebuildTerrain,
   chunkOf,
   isRevealed,
   isWater,
@@ -58,13 +50,6 @@ import {
 
 const DEFAULT_CONFIG: CityConfig = { historyInfluence: "full", aliases: {} };
 
-// Defense in depth (see ingest/claude-history.ts BUG-2 fix): a repo named after
-// a subagent worktree ("agent-<hex>") must NEVER found a lot. The ingest layer
-// already re-attributes subagent worktrees to their parent repo, so in practice
-// no such repo reaches the fold; this is a belt-and-suspenders guard so a stale
-// checkpoint or an un-patched event source can't resurrect phantom lots.
-const PHANTOM_REPO = /^agent-a[0-9a-f]{12,}$/;
-
 // ============================ time helpers ============================
 
 function dateKey(ts: string): string {
@@ -75,16 +60,22 @@ function dayIndex(ts: string, foundedKey: string): number {
   const b = Date.parse(`${foundedKey}T00:00:00Z`);
   return Math.round((a - b) / 86400000);
 }
-function hourOf(ts: string): number {
-  const m = /T(\d{2})/.exec(ts);
-  return m ? parseInt(m[1]!, 10) : 12;
-}
-
 // ============================ internal state ============================
+
+/**
+ * `scene` = what KIND of city this is. "solo" = one founder's city (founder
+ * cottage + hamlet props, tiers capped by the user's historyInfluence); "shared"
+ * = a merged multi-contributor city (no single founder, tiers uncapped since
+ * per-user caps already applied). The local server renders a SOLO city; the hub
+ * renders a SHARED one — same pipeline, different scene.
+ */
+export type Scene = "solo" | "shared";
 
 interface State {
   seed: string;
   config: CityConfig;
+  scene: Scene;
+  dropped: number; // lots that couldn't be placed (world full) — reported, not lost
   geo: Geo;
   ilots: ILot[];
   lotByRepo: Map<string, ILot>;
@@ -94,9 +85,7 @@ interface State {
   chunks: Chunk[];
   landmarks: Landmark[];
   baseline: Baseline;
-  carvedWater: Coord[];
   // economy / aux
-  warehouse: Map<string, number>;
   globalWU: number;
   nextShipWU: number;
   shipCount: number;
@@ -118,12 +107,6 @@ interface State {
   day: number;
   foundedTs: string;
   deltas: CityDelta[];
-  // True only while the OPEN (still-provisional) day is being folded in
-  // finalize. The open day is re-derived on every resume, so a chunk.reveal
-  // emitted for it would be duplicated on each poll (see surveyStep). Committed
-  // days (runCommitted) leave this false and emit normally. Runtime-only — never
-  // serialized (each fold sets it fresh).
-  foldingOpenDay: boolean;
 }
 
 function emit(st: State, kind: DeltaKind, fields: Record<string, unknown>): void {
@@ -146,7 +129,7 @@ function snapOrigin(geo: Geo, x: number, y: number): { x: number; y: number } {
   return { x, y };
 }
 
-function initState(seed: string, config: CityConfig): State {
+function initState(seed: string, config: CityConfig, scene: Scene = "solo"): State {
   const biome = biomeOf(seed);
   const growth = growthDirOf(seed);
   const geo: Geo = {
@@ -184,6 +167,8 @@ function initState(seed: string, config: CityConfig): State {
   const st: State = {
     seed,
     config,
+    scene,
+    dropped: 0,
     geo,
     ilots: [],
     lotByRepo: new Map(),
@@ -193,8 +178,6 @@ function initState(seed: string, config: CityConfig): State {
     chunks,
     landmarks: [],
     baseline: { housePos: [geo.origin.x, geo.origin.y], roadPath: [], props: [] },
-    carvedWater: [],
-    warehouse: new Map(),
     globalWU: 0,
     nextShipWU: SHIP_PER_WU,
     shipCount: 0,
@@ -215,7 +198,6 @@ function initState(seed: string, config: CityConfig): State {
     day: 0,
     foundedTs: "",
     deltas: [],
-    foldingOpenDay: false,
   };
 
   buildBaseline(st);
@@ -252,7 +234,12 @@ function buildBaseline(st: State): void {
       }
   }
   if (boat) props.push({ kind: "boat", pos: boat });
-  st.baseline = { housePos: [ox, oy], roadPath, props };
+  // A SHARED city has no single founder: keep the central plaza road, drop the
+  // founder cottage + hamlet props. A SOLO city (local, single-user) keeps the
+  // founder hamlet — Yehuda's original.
+  st.baseline = st.scene === "shared"
+    ? { housePos: [ox, oy], roadPath, props: [], hamlet: false }
+    : { housePos: [ox, oy], roadPath, props };
 
   // baseline.init carries the renderer bootstrap (seed/foundedTs/biome/baseline).
   // biome.water and foundedTs are back-patched at finalize (final revealed water,
@@ -279,74 +266,40 @@ function buildBaseline(st: State): void {
 
 // ============================ day step ============================
 
+/** A per-(tile, day) merged fact — renderCity's unit of work. `repo` is the
+ * stable tile identity; `display` is the shown name. */
 interface Activity {
   repo: string;
+  display: string;
   firstTs: string;
-  tools: number;
   turns: number;
   forks: number;
-  sessions: number;
   founding: boolean;
   allnighter: boolean;
   sessionIds: Set<string>;
-  events: PixelEvent[];
-}
-
-function aggregate(st: State, dayEvents: PixelEvent[]): Activity[] {
-  const map = new Map<string, Activity>();
-  for (const ev of dayEvents) {
-    if (PHANTOM_REPO.test(ev.repo)) continue; // never let subagent worktrees found lots
-    let a = map.get(ev.repo);
-    if (!a) {
-      a = {
-        repo: ev.repo,
-        firstTs: ev.ts,
-        tools: 0,
-        turns: 0,
-        forks: 0,
-        sessions: 0,
-        founding: !st.lotByRepo.has(ev.repo),
-        allnighter: false,
-        sessionIds: new Set(),
-        events: [],
-      };
-      map.set(ev.repo, a);
-    }
-    if (ev.ts < a.firstTs) a.firstTs = ev.ts;
-    a.events.push(ev);
-    a.sessionIds.add(ev.session);
-    const h = hourOf(ev.ts);
-    if (h >= 0 && h < 5) a.allnighter = true;
-    switch (ev.kind) {
-      case "tool.post":
-        a.tools++;
-        break;
-      case "turn.end":
-        a.turns++;
-        break;
-      case "fork.start":
-        a.forks++;
-        break;
-      case "session.start":
-        a.sessions++;
-        break;
-      default:
-        break;
-    }
-  }
-  return [...map.values()];
+  wu: number; // day's WU (already economy-capped upstream by gamify)
+  category: Category;
+  secondary: Category | null;
+  contributors: string[]; // handles active on this tile so far (cumulative)
+  personal: boolean; // non-repo workspace -> treehouse
 }
 
 function foundLot(st: State, a: Activity): void {
-  const { category, secondary } = dominantCategory(a.events);
+  const category = a.category ?? "code";
+  const secondary = a.secondary ?? null;
   const placeIdx = st.lotOrder.length;
+  // Uniform placement (classic affinity) for git and per-user projects alike —
+  // per-user tiles are an identity/dedup concept, never a spatial one.
   const placed = placeLot(st.geo, category, placeIdx);
-  if (!placed) return;
+  if (!placed) {
+    st.dropped++;
+    return;
+  }
   const [x, y] = placed.pos;
   const alias = `building-${placeIdx + 1}`;
   const lot: ILot = {
     id: `h(${a.repo})`,
-    repo: a.repo,
+    repo: a.display ?? a.repo,
     alias,
     category,
     secondary,
@@ -362,6 +315,8 @@ function foundLot(st: State, a: Activity): void {
     roadId: null,
     lastUpgradeDay: -1,
     lastRenovateDay: -1,
+    contributors: a.contributors,
+    personal: a.personal,
   };
   st.ilots.push(lot);
   st.lotByRepo.set(a.repo, lot);
@@ -383,6 +338,8 @@ function foundLot(st: State, a: Activity): void {
     variant: lot.variant,
     foundedDay: st.day,
     lastActiveDay: st.day,
+    contributors: lot.contributors,
+    personal: lot.personal,
   });
 
   // road from lot to nearest road
@@ -404,24 +361,20 @@ function foundLot(st: State, a: Activity): void {
 
 /** If lot density has grown enough, survey one new district and log the moment.
  * Emits chunk.reveal{surveyed:true}; terrain existence is NOT touched (all chunks
- * are already revealed in the model).
- *
- * maybeSurvey ALWAYS runs (it mutates geo.surveyed, which feeds later survey
- * decisions this fold), but the chunk.reveal is emitted ONLY on committed days.
- * The open day is re-derived on every resume from an un-advanced surveyed set
- * (the checkpoint commits surveyed through openDay-1, before the open day folds),
- * so emitting here would re-survey and re-emit the SAME chunk on every poll —
- * the day7:52 duplicate-reveal bug. Deferring emission to when the day becomes
- * committed (runCommitted, foldingOpenDay=false) makes each chunk.reveal fire
- * exactly once, on the same day, whether reached by a full or incremental fold. */
+ * are already revealed in the model). renderCity folds the whole stream in one
+ * deterministic pass, so each survey emits exactly once. */
 function surveyStep(st: State): void {
   const picked = maybeSurvey(st.geo, st.geo.surveyed.size);
-  if (picked && !st.foldingOpenDay) {
+  if (picked) {
     emit(st, "chunk.reveal", { x: picked.cx, y: picked.cy, revealedDay: st.day, surveyed: true });
   }
 }
 
 function detectCoupling(st: State, acts: Activity[]): void {
+  // Session-based rails, uniform across classic and gamified paths: projects
+  // worked in the same agent session (shared hashed session id) get railed. In
+  // the gamified stream this couples collaborators naturally — a session id
+  // hashes identically for every contributor who shared it.
   // record today's session->repos, then rail newly co-occurring founded pairs
   const touched = new Set<string>();
   for (const a of acts) {
@@ -454,26 +407,19 @@ function detectCoupling(st: State, acts: Activity[]): void {
 }
 
 function applyEconomy(st: State, acts: Activity[]): void {
-  const cap = tierCapFor(st.config.historyInfluence);
-  // per-repo cap + warehouse -> spendable
-  const spendables: { repo: string; spendable: number; a: Activity }[] = [];
-  for (const a of acts) {
-    const raw = rawWu(a);
-    const wh = st.warehouse.get(a.repo) ?? 0;
-    const { spendable, warehouse } = applyRepoCap(raw, wh);
-    st.warehouse.set(a.repo, warehouse);
-    spendables.push({ repo: a.repo, spendable, a });
-  }
-  // global daily cap across repos, deterministic order by repo name
+  // WU is already economy-capped upstream by gamify (per-repo warehouse + global
+  // cap), so the fold takes it as-is. Tier cap (scene): a SOLO city honors the
+  // user's historyInfluence; a SHARED city sums per-user-capped WU across
+  // contributors, so it caps at MAX_TIER.
+  const cap = st.scene === "shared" ? MAX_TIER : tierCapFor(st.config.historyInfluence);
+  const spendables = acts.map((a) => ({ repo: a.repo, spendable: a.wu ?? 0, a }));
+  // deterministic order by repo name
   spendables.sort((p, q) => (p.repo < q.repo ? -1 : p.repo > q.repo ? 1 : 0));
-  let globalToday = 0;
   let dayWU = 0;
   let dayForks = 0;
   const activeCount = acts.length;
   for (const s of spendables) {
-    let spend = s.spendable;
-    if (globalToday + spend > GLOBAL_DAILY_CAP) spend = Math.max(0, GLOBAL_DAILY_CAP - globalToday);
-    globalToday += spend;
+    const spend = s.spendable;
     const lot = st.lotByRepo.get(s.repo);
     if (!lot) continue;
     // accumulate real turns/forks for milestones (uncapped)
@@ -491,22 +437,36 @@ function applyEconomy(st: State, acts: Activity[]): void {
     lot.wu += spend;
     st.globalWU += spend;
     dayWU += spend;
+    // keep the contributor set current, and surface a change even when it doesn't
+    // cross a tier (so attribution updates live as new contributors join a tile).
+    let contribChanged = false;
+    if (s.a.contributors) {
+      const next = s.a.contributors.join(",");
+      if ((lot.contributors ?? []).join(",") !== next) {
+        lot.contributors = s.a.contributors;
+        contribChanged = true;
+      }
+    }
     // tier check
     const nt = cappedTier(lot.wu, cap);
-    if (nt > lot.tier) {
+    const tierUp = nt > lot.tier;
+    if (tierUp) {
       lot.prevTier = lot.tier;
       lot.tier = nt;
       lot.lastUpgradeDay = st.day;
-      const tp = tierProgress(lot.wu, nt);
+    }
+    if (tierUp || contribChanged) {
+      const tp = tierProgress(lot.wu, lot.tier);
       emit(st, "lot.upgrade", {
         id: lot.id,
-        tier: nt,
+        tier: lot.tier,
         wu: lot.wu,
         wuIntoTier: tp.wuIntoTier,
         wuNextTier: tp.wuNextTier,
         lastActiveDay: st.day,
+        contributors: lot.contributors,
       });
-      surveyStep(st);
+      if (tierUp) surveyStep(st);
     }
     // road usage: busy corridors upgrade (repo worked alongside neighbors)
     if (lot.roadId && activeCount >= 2) {
@@ -617,8 +577,7 @@ function populationPass(st: State): void {
   }
 }
 
-function stepDay(st: State, dayEvents: PixelEvent[]): void {
-  const acts = aggregate(st, dayEvents);
+function stepActivities(st: State, acts: Activity[]): void {
   // foundings in first-appearance order
   const founders = acts.filter((a) => a.founding).sort((p, q) => (p.firstTs < q.firstTs ? -1 : p.firstTs > q.firstTs ? 1 : p.repo < q.repo ? -1 : 1));
   for (const a of founders) foundLot(st, a);
@@ -653,6 +612,8 @@ function assembleModel(st: State): CityModel {
         decay: l.decay,
         underConstruction: l.lastUpgradeDay === st.day || l.lastRenovateDay === st.day,
         variant: l.variant,
+        contributors: l.contributors,
+        personal: l.personal,
       };
     });
   const roads = st.iroads.map((r) => ({ id: r.id, path: r.path, tier: r.tier }));
@@ -738,255 +699,161 @@ function patchBaselineDelta(st: State): void {
   }
 }
 
-// ============================ (de)serialization for checkpoints ============================
+// ============================ renderCity (THE shared pipeline) ============================
 
-function serializeState(st: State): Checkpoint["state"] {
-  return {
-    ilots: st.ilots,
-    iroads: st.iroads,
-    rails: st.rails,
-    railPairs: [...st.railPairs],
-    chunks: st.chunks,
-    landmarks: st.landmarks,
-    baseline: st.baseline,
-    occupied: [...st.geo.occupied],
-    roadSet: [...st.geo.roadSet],
-    surveyed: [...st.geo.surveyed],
-    carvedWater: st.carvedWater,
-    warehouse: [...st.warehouse.entries()],
-    globalWU: st.globalWU,
-    nextShipWU: st.nextShipWU,
-    shipCount: st.shipCount,
-    cumTurns: st.cumTurns,
-    cumForks: st.cumForks,
-    repoCount: st.repoCount,
-    perDayWU: st.perDayWU,
-    perDayForks: st.perDayForks,
-    milestones: st.milestones,
-    allNighterUntilDay: st.allNighterUntilDay,
-    sessionRepos: [...st.sessionRepos.entries()],
-    seq: st.seq,
-    day: st.day,
-    foundedTs: st.foundedTs,
-    lotOrder: st.lotOrder,
-    population: st.population,
-    pets: st.pets,
-    streak: st.streak,
-    allNighter: st.allNighter,
-  };
+/**
+ * The one rendering pipeline: fold a gamified event stream into a CityModel +
+ * delta timeline. Local (single contributor) and the federation hub (all
+ * contributors merged) call the SAME function — the only difference is the
+ * breadth of the input stream. Deterministic given (events, seed).
+ *
+ * Merge policy comes from the stream itself, via `tileId`:
+ *   • git projects share a tile keyed by the remote — different contributors'
+ *     work on the same repo merges into one building.
+ *   • local (no-remote) projects get a per-user tile — never merged, rendered
+ *     as a treehouse.
+ * Days are recomputed against a SHARED calendar epoch (earliest ts across the
+ * whole stream) so independently-gamified contributor streams align in time.
+ */
+export interface RenderResult {
+  model: CityModel;
+  deltas: CityDelta[];
+  dropped: number;
 }
 
-function deserializeState(cp: Checkpoint, config: CityConfig): State {
-  const seed = cp.seed;
-  // deep clone so an incremental fold never mutates the caller's checkpoint
-  // (arrays/objects here become the live fold state).
-  const s = structuredClone(cp.state);
-  const biome = biomeOf(seed);
-  const growth = growthDirOf(seed);
-  const geo: Geo = {
-    seed,
-    biome,
-    growthVec: growth.vec,
-    growthDir: growth.name,
-    origin: { x: cp.model.biome.origin[0], y: cp.model.biome.origin[1] },
-    ground: [],
-    occupied: new Set(s.occupied),
-    roadSet: new Set(s.roadSet),
-    surveyed: new Set(s.surveyed),
-    lotsGeo: s.ilots.map((l) => ({ x: l.x, y: l.y, cat: l.category as Category })),
-  };
-  rebuildTerrain(geo, s.carvedWater);
-  // re-sync road tiles into the regenerated ground grid: setRoad in the live
-  // fold sets BOTH roadSet AND ground[y][x].t="road"; rebuildTerrain only
-  // restores water/elev/sand, so without this, tileFree (which reads ground.t)
-  // would treat restored road tiles as buildable and placement would diverge.
-  for (const k of geo.roadSet) {
-    const [x, y] = k.split(",").map(Number) as [number, number];
-    const row = geo.ground[y];
-    if (row && row[x] && row[x]!.t !== "water") row[x]!.t = "road";
-  }
-  const st: State = {
-    seed,
-    config,
-    geo,
-    ilots: s.ilots,
-    lotByRepo: new Map(s.ilots.map((l) => [l.repo, l])),
-    iroads: s.iroads,
-    rails: s.rails,
-    railPairs: new Set(s.railPairs),
-    chunks: s.chunks,
-    landmarks: s.landmarks,
-    baseline: s.baseline,
-    carvedWater: s.carvedWater,
-    warehouse: new Map(s.warehouse),
-    globalWU: s.globalWU,
-    nextShipWU: s.nextShipWU,
-    shipCount: s.shipCount,
-    cumTurns: s.cumTurns,
-    cumForks: s.cumForks,
-    repoCount: s.repoCount,
-    perDayWU: s.perDayWU,
-    perDayForks: s.perDayForks,
-    milestones: s.milestones,
-    allNighterUntilDay: s.allNighterUntilDay,
-    sessionRepos: new Map(s.sessionRepos),
-    lotOrder: s.lotOrder,
-    population: s.population,
-    pets: s.pets,
-    streak: s.streak,
-    allNighter: s.allNighter,
-    seq: s.seq,
-    day: s.day,
-    foundedTs: s.foundedTs,
-    deltas: [],
-    foldingOpenDay: false,
-  };
-  return st;
+interface TileDay {
+  firstTs: string;
+  wu: number;
+  forks: number;
+  turns: number;
+  allnighter: boolean;
+  sessions: Set<string>;
+  today: Set<string>; // contributor handles active this day
+  catWu: Map<Category, number>; // category weighted by wu (min 1) to pick a dominant
 }
 
-// carvedWater = water tiles present now but not in the seed's base terrain
-// (i.e. inlets carved for harbor lots). Recomputed at finalize so the checkpoint
-// can rebuild the exact ground grid on resume.
-function recordCarvedWater(st: State): void {
-  // regenerate base terrain to compare
-  const base: Geo = {
-    ...st.geo,
-    ground: [],
-    occupied: new Set(),
-    roadSet: new Set(),
-    surveyed: new Set(),
-    lotsGeo: [],
-  };
-  genTerrain(base);
-  const carved: Coord[] = [];
-  for (let y = 0; y < GRID; y++) {
-    for (let x = 0; x < GRID; x++) {
-      if (st.geo.ground[y]![x]!.t === "water" && base.ground[y]![x]!.t !== "water") {
-        carved.push([x, y]);
-      }
+interface Tile {
+  proj: ProjectId;
+  display: string;
+  personal: boolean;
+  days: Map<number, TileDay>;
+}
+
+function pickCategory(catWu: Map<Category, number>): Category {
+  let best: Category = "code";
+  let bestWu = -1;
+  for (const [c, w] of [...catWu.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    if (w > bestWu) {
+      best = c;
+      bestWu = w;
     }
   }
-  carved.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  st.carvedWater = carved;
+  return best;
 }
 
-// ============================ public API ============================
+export interface RenderOpts {
+  config?: Partial<CityConfig>;
+  /** "solo" (default) = founder's city; "shared" = merged multi-contributor hub. */
+  scene?: Scene;
+  /** Fold idle days through this day (time-travel) even past the last event. */
+  throughDay?: number;
+}
 
-/**
- * Fold every COMPLETE day in `events` (days [fromDay .. openDay-1]) into `st`,
- * and return the still-OPEN day (the highest day index present) together with
- * its raw events. The open day is deliberately NOT applied here — the caller
- * re-folds it from a committed snapshot on every resume so that:
- *   • `day` is always the whole-days-since-foundedTs calendar diff (a day is
- *     only "reached" when an event lands on it — never a free-running counter);
- *   • daily caps (per-repo warehouse + GLOBAL_DAILY_CAP) always see the WHOLE
- *     day at once, so an incremental fold that resumes mid-day is byte-identical
- *     to a full fold instead of double-counting or dropping same-day events.
- */
-function runCommitted(
-  st: State,
-  events: PixelEvent[],
-  fromDay: number
-): { openDay: number; openEvents: PixelEvent[] } {
-  if (!events.length) return { openDay: fromDay, openEvents: [] };
-  const founded = st.foundedTs || dateKey(events[0]!.ts);
-  if (!st.foundedTs) st.foundedTs = founded;
-  const openDay = Math.max(fromDay, ...events.map((e) => dayIndex(e.ts, founded)));
-  const byDay = new Map<number, PixelEvent[]>();
-  for (const ev of events) {
-    const d = dayIndex(ev.ts, founded);
-    const arr = byDay.get(d) ?? [];
-    arr.push(ev);
-    byDay.set(d, arr);
+export function renderCity(events: GamifiedEvent[], seed: string, opts: RenderOpts = {}): RenderResult {
+  const { config = {}, scene = "solo", throughDay } = opts;
+  const cfg: CityConfig = { ...DEFAULT_CONFIG, ...config, aliases: config.aliases ?? {} };
+  const st = initState(seed, cfg, scene);
+
+  if (!events.length) {
+    st.day = throughDay ?? 0;
+    patchBaselineDelta(st);
+    emitSyncLots(st);
+    return { model: assembleModel(st), deltas: st.deltas, dropped: 0 };
   }
-  for (const arr of byDay.values()) arr.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  for (let d = fromDay; d < openDay; d++) {
+
+  // shared calendar: earliest timestamp across the merged stream is day 0.
+  const epochKey = dateKey(events.reduce((m, e) => (e.ts < m ? e.ts : m), events[0]!.ts));
+  st.foundedTs = epochKey;
+
+  const tiles = new Map<string, Tile>();
+  for (const e of events) {
+    const tid = tileId(e.proj, e.by);
+    let tile = tiles.get(tid);
+    if (!tile) {
+      tile = { proj: e.proj, display: e.name, personal: isTreehouse(e.proj), days: new Map() };
+      tiles.set(tid, tile);
+    }
+    const day = Math.max(0, dayIndex(e.ts, epochKey));
+    let td = tile.days.get(day);
+    if (!td) {
+      td = { firstTs: e.ts, wu: 0, forks: 0, turns: 0, allnighter: false, sessions: new Set(), today: new Set(), catWu: new Map() };
+      tile.days.set(day, td);
+    }
+    if (e.ts < td.firstTs) td.firstTs = e.ts;
+    td.wu += e.wu;
+    td.forks += e.forks;
+    td.turns += e.turns;
+    td.allnighter ||= e.allnighter;
+    for (const s of e.sessions) td.sessions.add(s);
+    td.today.add(e.by);
+    td.catWu.set(e.category, (td.catWu.get(e.category) ?? 0) + Math.max(1, e.wu));
+  }
+
+  // Build per-day activities, tile by tile, accumulating the cumulative
+  // contributor set so attribution grows as new handles touch a project.
+  const byDay = new Map<number, Activity[]>();
+  let maxDay = 0;
+  for (const [tid, tile] of tiles) {
+    const days = [...tile.days.keys()].sort((a, b) => a - b);
+    const firstDay = days[0]!;
+    const cum = new Set<string>();
+    for (const d of days) {
+      const td = tile.days.get(d)!;
+      for (const by of td.today) cum.add(by);
+      maxDay = Math.max(maxDay, d);
+      const act: Activity = {
+        repo: tid,
+        display: tile.display,
+        firstTs: td.firstTs,
+        turns: td.turns,
+        forks: td.forks,
+        founding: d === firstDay,
+        allnighter: td.allnighter,
+        sessionIds: td.sessions,
+        wu: td.wu,
+        category: pickCategory(td.catWu),
+        secondary: null,
+        contributors: [...cum].sort(),
+        personal: tile.personal,
+      };
+      const arr = byDay.get(d) ?? [];
+      arr.push(act);
+      byDay.set(d, arr);
+    }
+  }
+
+  const endDay = Math.max(maxDay, throughDay ?? maxDay);
+  for (let d = 0; d <= endDay; d++) {
     st.day = d;
-    stepDay(st, byDay.get(d) ?? []);
+    stepActivities(st, byDay.get(d) ?? []);
   }
-  return { openDay, openEvents: byDay.get(openDay) ?? [] };
-}
-
-function finalize(
-  st: State,
-  openDay: number,
-  openEvents: PixelEvent[],
-  upToTs: string
-): FoldResult {
-  // Snapshot resumable state as of the last COMPLETE day (openDay-1), BEFORE the
-  // open day is applied. carvedWater is recorded here so the snapshot's terrain
-  // rebuilds to the pre-open-day base (the open day re-carves on resume).
-  recordCarvedWater(st);
-  const committed = structuredClone(serializeState(st)) as Checkpoint["state"];
-  committed.day = openDay - 1;
-
-  // Overlay the OPEN day onto the live state to build the served model + deltas.
-  // This is the one day that gets re-derived on every resume (from cp.pending).
-  // foldingOpenDay suppresses chunk.reveal for this provisional day (surveyStep):
-  // it is re-emitted once, for good, when a later fold completes the day.
-  st.day = openDay;
-  st.foldingOpenDay = true;
-  stepDay(st, openEvents);
-  st.foldingOpenDay = false;
-  // back-patch the day-0 baseline.init delta with final biome so the renderer's
-  // delta-replay reconstructs model.biome (a no-op for incremental folds, whose
-  // baseline.init lives in the earlier checkpoint's delta log).
+  st.day = endDay;
   patchBaselineDelta(st);
-  // final delta of every fold: overwrite exact per-lot wu/progress/lastActiveDay/
-  // decay so delta replay == model (byte-exact).
   emitSyncLots(st);
-  const model = assembleModel(st); // model.day = st.day = openDay = calendar diff
-
-  // Resume must continue seq PAST the provisional open-day deltas so the delta
-  // stream never reuses a seq (open-day deltas are regenerated on resume).
-  committed.seq = st.seq;
-
-  const checkpoint: Checkpoint = {
-    version: 1,
-    seed: st.seed,
-    upToTs,
-    model,
-    state: committed,
-    pending: openEvents,
-  };
-  return { model, deltas: st.deltas, checkpoint };
+  return { model: assembleModel(st), deltas: st.deltas, dropped: st.dropped };
 }
 
-/** Full fold: events (any order) + seed + config -> model, deltas, checkpoint. */
-export function fold(
-  events: PixelEvent[],
-  seed: string,
-  config: Partial<CityConfig> = {}
-): FoldResult {
-  const cfg: CityConfig = { ...DEFAULT_CONFIG, ...config, aliases: config.aliases ?? {} };
-  const sorted = events.slice().sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  const st = initState(seed, cfg);
-  const { openDay, openEvents } = runCommitted(st, sorted, 0);
-  const upToTs = sorted.length ? sorted[sorted.length - 1]!.ts : new Date(0).toISOString();
-  return finalize(st, openDay, openEvents, upToTs);
+/** Shared-calendar epoch key (YYYY-MM-DD of the earliest event) for a gamified
+ * stream — the day-0 reference renderCity folds against. */
+export function epochKeyOf(events: GamifiedEvent[]): string {
+  if (!events.length) return dateKey(new Date(0).toISOString());
+  return dateKey(events.reduce((m, e) => (e.ts < m ? e.ts : m), events[0]!.ts));
 }
 
-/**
- * Incremental fold: continue from a checkpoint. The checkpoint's still-open day
- * (cp.pending) is prepended to the new events and the open day is re-folded from
- * the committed snapshot, so the result is byte-identical to a full fold over
- * (originalEvents + newEvents) for ANY split point — including mid-day.
- */
-export function foldIncremental(
-  cp: Checkpoint,
-  newEvents: PixelEvent[],
-  config: Partial<CityConfig> = {}
-): FoldResult {
-  const cfg: CityConfig = { ...DEFAULT_CONFIG, ...config, aliases: config.aliases ?? {} };
-  const st = deserializeState(cp, cfg);
-  const pending = cp.pending ?? [];
-  const allTail = [...pending, ...newEvents].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
-  if (!allTail.length) return { model: cp.model, deltas: [], checkpoint: cp };
-  const fromDay = st.day + 1; // = cp.state.day + 1 = the previously-open day
-  const { openDay, openEvents } = runCommitted(st, allTail, fromDay);
-  const upToTs = allTail[allTail.length - 1]!.ts;
-  return finalize(st, openDay, openEvents, upToTs);
+/** Day index of a timestamp against a shared epoch key (renderCity's calendar). */
+export function sharedDay(ts: string, epochKey: string): number {
+  return Math.max(0, dayIndex(ts, epochKey));
 }
 
 // re-export handy bits for CLI/tests
-export { chunkOf, tileFree, CHUNK, GRID, CENTER, classifyEvent };
+export { chunkOf, tileFree, CHUNK, GRID, CENTER };

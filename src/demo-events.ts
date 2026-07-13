@@ -8,6 +8,7 @@
 
 import type { PixelEvent, Category, EventKind } from "./types.js";
 import { rand } from "./seed.js";
+import type { IdentityResolver } from "./gamified/gamify.js";
 
 interface RepoPlan {
   name: string;
@@ -175,3 +176,15 @@ export function generateDemoEvents(seed: string, opts: DemoOptions = {}): PixelE
   events.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return events;
 }
+
+// A couple of demo repos are "personal workspaces" (no git remote) so the demo
+// showcases treehouses alongside civic buildings; the rest get synthetic git
+// remotes and render as shared buildings. Deterministic + machine-independent
+// (never touches real git), so the demo/golden look reproduces on any host.
+const DEMO_TREEHOUSES = new Set(["ml-notebook", "legacy-cli"]);
+
+/** Identity resolver for the demo/golden stream — synthetic, filesystem-free. */
+export const demoResolver: IdentityResolver = (repo) =>
+  DEMO_TREEHOUSES.has(repo)
+    ? { proj: { kind: "local", token: `demo-${repo}` }, name: repo }
+    : { proj: { kind: "git", remote: `github.com/agentcity/${repo}` }, name: repo };

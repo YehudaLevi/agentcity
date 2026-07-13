@@ -6,10 +6,12 @@
 import { writeFileSync } from "node:fs";
 import type { PixelEvent, CityModel, HistoryInfluence } from "./types.js";
 import { stableStringify } from "./types.js";
-import { fold } from "./compiler.js";
+import { renderCity } from "./compiler.js";
+import { gamify } from "./gamified/gamify.js";
+import { createIdentityResolver, pathIndex } from "./gamified/identity.js";
 import { parseClaudeHistory } from "./ingest/claude-history.js";
 import { parsePixelagentsLog } from "./ingest/pixelagents-log.js";
-import { generateDemoEvents } from "./demo-events.js";
+import { generateDemoEvents, demoResolver } from "./demo-events.js";
 
 interface Args {
   history?: string;
@@ -92,7 +94,11 @@ function main(): void {
     events.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   }
 
-  const { model, deltas } = fold(events, args.seed, { historyInfluence: args.influence });
+  // The one pipeline: raw events -> gamified stream (economy + git identity) ->
+  // renderCity (solo founder city). --demo uses the synthetic resolver.
+  const resolve = args.demo ? demoResolver : createIdentityResolver(pathIndex(events));
+  const stream = gamify(events, resolve, "local");
+  const { model, deltas } = renderCity(stream, args.seed, { scene: "solo", config: { historyInfluence: args.influence } });
   // Bundle shape matches the renderer's bootstrap (window.__CITY__): the
   // model for live view plus the delta log for the founding timelapse.
   const json = stableStringify({ model, deltas });

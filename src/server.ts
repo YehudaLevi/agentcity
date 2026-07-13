@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { CityModel, CityDelta } from "./types.js";
+import { coerceBatch, type GamifiedBatch } from "./gamified/types.js";
 
 const HEARTBEAT_MS = 15_000;
 
@@ -39,19 +40,32 @@ export interface AgentcityServerOptions {
   heartbeatMs?: number;
   /**
    * Recompile the city from its archived history with a NEW seed and persist it
-   * exactly as the CLI `refound` does (config seed pinned, checkpoint + delta log
-   * rewritten, archives untouched). Wired in bin/agentcity.ts where founding
-   * lives; kept injectable so server unit tests never touch disk. When omitted,
-   * POST /refound answers `{ok:false,error:"unsupported"}`. The returned bundle
-   * fully REPLACES the served one (this is a re-found, not an incremental fold).
+   * exactly as the CLI `refound` does (config seed pinned, archives untouched).
+   * Wired in bin/agentcity.ts where founding lives; kept injectable so server
+   * unit tests never touch disk. When omitted, POST /refound answers
+   * `{ok:false,error:"unsupported"}`. The returned bundle fully REPLACES the
+   * served one (a re-found, not an incremental update).
    */
   onRefound?: (seed: string) => Promise<CityBundle>;
+  /**
+   * Federation hub: accept a POST /ingest batch of gamified events from a
+   * contributor. Wired only in `--central` mode; when omitted the route 404s
+   * (a normal local server is not a hub).
+   */
+  onIngest?: (batch: GamifiedBatch) => void;
+  /**
+   * Federation hub time-travel: return the shared city as of `day` (or the
+   * latest when null). Wired only in `--central` mode; enables GET /city?day=N.
+   */
+  onCityAt?: (day: number | null) => CityModel;
 }
 
 /** Max accepted seed length; longer inputs are rejected (400). */
 const MAX_SEED_LEN = 64;
 /** Cap the POST /refound body so a bad client can't stream unbounded bytes. */
 const MAX_BODY_BYTES = 4096;
+/** Larger cap for POST /ingest: a first-connect backlog can carry many events. */
+const MAX_INGEST_BYTES = 4 * 1024 * 1024;
 /** Allowed seed characters — a readable, filesystem/JSON-safe subset. */
 const SEED_RE = /^[a-zA-Z0-9 _-]+$/;
 
@@ -96,6 +110,13 @@ export interface AgentcityServer {
    * founding timelapse sees them) and pushed to every open /events stream.
    */
   update(model: CityModel, newDeltas: CityDelta[]): void;
+  /**
+   * Replace the served scene wholesale (federation hub): swap the served bundle
+   * (so a fresh page load gets the full recomputed timeline) and push
+   * `liveDeltas` (typically one `reset`) to open clients. Unlike update(), this
+   * does not accumulate delta history — the hub recomputes from events.
+   */
+  replace(bundle: CityBundle, liveDeltas: CityDelta[]): void;
   /** Broadcast atmosphere-only activity messages over the same SSE stream. */
   pushActivity(msgs: Array<{ type: "activity"; repo: string; kind: string; tool?: string }>): void;
   /** Current served bundle (test hook). */
@@ -120,8 +141,18 @@ export function createAgentcityServer(opts: AgentcityServerOptions): AgentcitySe
   const webRoot = opts.webRoot ?? defaultWebRoot();
   const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
   const onRefound = opts.onRefound;
+  const onIngest = opts.onIngest;
+  const onCityAt = opts.onCityAt;
   let bundle: CityBundle = { model: opts.bundle.model, deltas: opts.bundle.deltas.slice() };
   const clients = new Set<ServerResponse>();
+  let syncSeq = 0; // seq for the on-connect resync frame
+
+  /** A `replace(fromDay:0)` carrying the whole current timeline — sent to every
+   * (re)connecting SSE client so one that missed deltas while disconnected
+   * catches up here (SSE has no built-in replay), instead of staying stale. */
+  function resyncDelta(): CityDelta {
+    return { day: bundle.model.day, seq: syncSeq++, kind: "replace", fromDay: 0, deltas: bundle.deltas };
+  }
   // Single-flight guard: a recompile mutates on-disk state, so never run two at
   // once — a second POST /refound while one is in flight is rejected (409).
   let refoundInFlight = false;
@@ -222,12 +253,90 @@ export function createAgentcityServer(opts: AgentcityServerOptions): AgentcitySe
     });
   }
 
+  // POST /ingest — federation hub intake. Reads a bounded JSON body, validates
+  // it into a FederationBatch (dropping malformed events), hands it to onIngest.
+  //   404 no hook (not a hub) · 405 non-POST · 400 too large / malformed · 202 ok
+  function handleIngest(req: IncomingMessage, res: ServerResponse): void {
+    if (!onIngest) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("not found");
+      return;
+    }
+    if (req.method !== "POST") {
+      sendJson(res, 405, { ok: false, error: "method not allowed" });
+      return;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let aborted = false;
+    req.on("data", (c: Buffer) => {
+      if (aborted) return;
+      size += c.length;
+      if (size > MAX_INGEST_BYTES) {
+        aborted = true;
+        sendJson(res, 400, { ok: false, error: "request body too large" });
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => {
+      if (aborted) return;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch {
+        sendJson(res, 400, { ok: false, error: "malformed JSON body" });
+        return;
+      }
+      const batch = coerceBatch(parsed);
+      if (!batch) {
+        sendJson(res, 400, { ok: false, error: "invalid federation batch" });
+        return;
+      }
+      try {
+        onIngest(batch);
+        sendJson(res, 202, { ok: true, accepted: batch.events.length });
+      } catch (err) {
+        sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    });
+    req.on("error", () => {
+      if (!aborted) sendJson(res, 400, { ok: false, error: "request error" });
+    });
+  }
+
   function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const rawUrl = req.url ?? "/";
     const path = rawUrl.split("?")[0];
 
     if (path === "/refound") {
       handleRefound(req, res);
+      return;
+    }
+
+    if (path === "/ingest") {
+      handleIngest(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && path === "/city") {
+      if (!onCityAt) {
+        res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+        res.end("not found");
+        return;
+      }
+      const dayParam = new URL(rawUrl, "http://localhost").searchParams.get("day");
+      let day: number | null = null;
+      if (dayParam !== null) {
+        const n = Number(dayParam);
+        if (!Number.isInteger(n) || n < 0) {
+          sendJson(res, 400, { ok: false, error: "day must be a non-negative integer" });
+          return;
+        }
+        day = n;
+      }
+      sendJson(res, 200, { model: onCityAt(day) });
       return;
     }
 
@@ -265,6 +374,9 @@ export function createAgentcityServer(opts: AgentcityServerOptions): AgentcitySe
         connection: "keep-alive",
       });
       res.write("retry: 2000\n\n");
+      // resync-on-connect: hand the client the current full timeline so a
+      // reconnect after a dropped pipe never leaves it stale.
+      res.write(`data: ${JSON.stringify(resyncDelta())}\n\n`);
       clients.add(res);
       req.on("close", () => clients.delete(res));
       return;
@@ -329,6 +441,16 @@ export function createAgentcityServer(opts: AgentcityServerOptions): AgentcitySe
       for (const res of clients) {
         try {
           for (const d of newDeltas) res.write(`data: ${JSON.stringify(d)}\n\n`);
+        } catch {
+          clients.delete(res);
+        }
+      }
+    },
+    replace(next: CityBundle, liveDeltas: CityDelta[]) {
+      bundle = { model: next.model, deltas: next.deltas.slice() };
+      for (const res of clients) {
+        try {
+          for (const d of liveDeltas) res.write(`data: ${JSON.stringify(d)}\n\n`);
         } catch {
           clients.delete(res);
         }

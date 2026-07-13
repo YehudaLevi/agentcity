@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fold } from "../src/compiler.js";
+import { render } from "./support.js";
 import { biomeOf, widenAvenue, type Geo } from "../src/rules/placement.js";
 import { generateDemoEvents } from "../src/demo-events.js";
 import type { PixelEvent, Coord } from "../src/types.js";
@@ -36,17 +36,20 @@ describe("harbor rule: api lots touch water (carving an inlet if needed)", () =>
 
   it("every api lot touches water across biomes", () => {
     for (const seed of seeds) {
-      const { model } = fold(apiRepo("harbor-svc"), seed);
+      const { model } = render(apiRepo("harbor-svc"), seed);
       const lot = model.lots.find((l) => l.repo === "harbor-svc")!;
       expect(lot.category).toBe("api");
       expect(touchesWater(lot.pos as [number, number], model.biome.water as [number, number][])).toBe(true);
     }
   });
 
-  it("at least one hills seed carves a fresh inlet (non-empty carvedWater)", () => {
+  it("at least one seed carves a fresh inlet (api water exceeds base terrain water)", () => {
+    // No checkpoint to read carvedWater from; detect carving by comparing the
+    // api city's water to the seed's untouched base terrain (empty render).
     const carvingSeeds = seeds.filter((s) => {
-      const { checkpoint } = fold(apiRepo("harbor-svc"), s);
-      return checkpoint.state.carvedWater.length > 0;
+      const base = render([], s).model.biome.water.length;
+      const withApi = render(apiRepo("harbor-svc"), s).model.biome.water.length;
+      return withApi > base;
     });
     expect(carvingSeeds.length).toBeGreaterThan(0);
   });
@@ -58,7 +61,7 @@ describe("lot spacing & street invariants (game-rules §5)", () => {
 
   it("no two lots are orthogonally adjacent (every lot keeps a 1-tile ring)", () => {
     for (const seed of seeds) {
-      const { model } = fold(generateDemoEvents(seed), seed);
+      const { model } = render(generateDemoEvents(seed), seed);
       const occ = new Set(model.lots.map((l) => `${l.pos[0]},${l.pos[1]}`));
       for (const l of model.lots) {
         const [x, y] = l.pos;
@@ -73,7 +76,7 @@ describe("lot spacing & street invariants (game-rules §5)", () => {
 
   it("every lot fronts a street (orthogonally adjacent to a road tile)", () => {
     for (const seed of seeds) {
-      const { model } = fold(generateDemoEvents(seed), seed);
+      const { model } = render(generateDemoEvents(seed), seed);
       const roadTiles = new Set<string>();
       for (const r of model.roads) for (const [x, y] of r.path) roadTiles.add(`${x},${y}`);
       // baseline plaza road counts too
@@ -90,7 +93,7 @@ describe("lot spacing & street invariants (game-rules §5)", () => {
 
   it("no diagonal lot cluster exceeds a 2x2 tile footprint (block rule)", () => {
     for (const seed of seeds) {
-      const { model } = fold(generateDemoEvents(seed), seed);
+      const { model } = render(generateDemoEvents(seed), seed);
       const pts = model.lots.map((l) => l.pos as Coord);
       const present = new Set(pts.map(([x, y]) => `${x},${y}`));
       const seen = new Set<string>();
@@ -160,8 +163,8 @@ describe("lot spacing & street invariants (game-rules §5)", () => {
 
 describe("uniqueness (Rule 6): different seeds -> structurally different cities", () => {
   it("differs in biome or origin for distinct seeds", () => {
-    const a = fold(apiRepo("r1"), "seedA").model;
-    const b = fold(apiRepo("r1"), "seedB").model;
+    const a = render(apiRepo("r1"), "seedA").model;
+    const b = render(apiRepo("r1"), "seedB").model;
     const different =
       a.biome.kind !== b.biome.kind ||
       a.biome.origin[0] !== b.biome.origin[0] ||

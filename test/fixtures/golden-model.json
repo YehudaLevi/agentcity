@@ -3846,10 +3846,14 @@
     {
       "alias": "building-2",
       "category": "api",
+      "contributors": [
+        "golden"
+      ],
       "decay": 0,
       "foundedDay": 1,
-      "id": "h(api-svc)",
+      "id": "h(g:github.com/fixtures/api-svc)",
       "lastActiveDay": 1,
+      "personal": false,
       "pos": [
         27,
         33
@@ -3858,7 +3862,7 @@
       "secondary": null,
       "tier": 1,
       "underConstruction": false,
-      "variant": 205,
+      "variant": 770,
       "wu": 36,
       "wuIntoTier": 11,
       "wuNextTier": 90
@@ -3866,10 +3870,14 @@
     {
       "alias": "building-3",
       "category": "infra",
+      "contributors": [
+        "golden"
+      ],
       "decay": 0,
       "foundedDay": 4,
-      "id": "h(infra-repo)",
+      "id": "h(g:github.com/fixtures/infra-repo)",
       "lastActiveDay": 4,
+      "personal": false,
       "pos": [
         28,
         36
@@ -3878,7 +3886,7 @@
       "secondary": null,
       "tier": 1,
       "underConstruction": true,
-      "variant": 83,
+      "variant": 802,
       "wu": 33,
       "wuIntoTier": 8,
       "wuNextTier": 90
@@ -3886,19 +3894,23 @@
     {
       "alias": "building-1",
       "category": "code",
+      "contributors": [
+        "golden"
+      ],
       "decay": 0,
       "foundedDay": 0,
-      "id": "h(webshop)",
+      "id": "h(g:github.com/fixtures/webshop)",
       "lastActiveDay": 3,
+      "personal": false,
       "pos": [
         26,
         34
       ],
       "repo": "webshop",
-      "secondary": "tests",
+      "secondary": null,
       "tier": 1,
       "underConstruction": false,
-      "variant": 100,
+      "variant": 867,
       "wu": 43,
       "wuIntoTier": 18,
       "wuNextTier": 90
