@@ -460,7 +460,11 @@ let worldSeq=0, tileOrder=[], _drawKey="";   // rotation-aware painter order cac
 const CONTRIB_TINTS=["#e07a5f","#81b29a","#f2cc8f","#5f9ed1","#b18cd1","#e09891","#7cb59e","#dbb266","#c98fb0","#6fae8f"];
 function contribTint(handle){ return CONTRIB_TINTS[hashStr(handle)%CONTRIB_TINTS.length]; }
 function tintFam(fam,handle){ const t=contribTint(handle); return Object.assign({},fam,{base:mix(fam.base,t,0.30),roof:mix(fam.roof,t,0.22),trim:mix(fam.trim,t,0.18)}); }
-function contribLine(o){ if(!o.contributors) return ""; const cs=o.contributors, shown=cs.slice(0,3).join(", "), extra=cs.length>3?" +"+(cs.length-3):""; return "<br>by: <b>"+shown+extra+"</b>"; }
+// Contributor handles are foreign (from the hub wire). Even though coerce()
+// sanitizes them server-side, the renderer NEVER trusts a handle: escape before
+// it enters the tooltip's innerHTML (defense-in-depth against stored XSS).
+function escHtml(s){ return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+function contribLine(o){ if(!o.contributors) return ""; const cs=o.contributors, shown=cs.slice(0,3).map(escHtml).join(", "), extra=cs.length>3?" +"+(cs.length-3):""; return "<br>by: <b>"+shown+extra+"</b>"; }
 
 function buildWorld(m, isTimelapse){
   const w={ground:[],revealed:new Set(),roadTierAt:{},roadSet:new Set(),roadTiles:[],
@@ -1741,6 +1745,19 @@ if(SELFTEST){ (async()=>{
     res.checks.mapLayoutTargetsRefound = fetchURL==="/refound";
     res.checks.mapLayoutClickCycle = busyNow && reenabled && (toastEl?toastEl.classList.contains("show"):true);
     window.fetch=realFetch; mlInp.value="";
+    // 16) XSS: a hostile contributor handle must be ESCAPED in the tooltip .meta
+    //     (contribLine feeds innerHTML). Renderer never trusts a handle even if
+    //     coerce() already sanitized it server-side — belt and suspenders.
+    try{
+      const xlot=world.objs.find(o=>o.kind==="building"&&o.tier>0)||world.lots[0];
+      const savedC=xlot.contributors;
+      xlot.contributors=['<img src=x onerror=alert(1)>','<script>bad()</script>'];
+      showTip(xlot,50,50);
+      const metaHTML=tip.querySelector(".meta").innerHTML;
+      res.checks.contribHandleEscaped = metaHTML.indexOf("<img")<0 && metaHTML.indexOf("<script")<0
+        && metaHTML.indexOf("&lt;img")>=0;
+      hideTip(); xlot.contributors=savedC;
+    }catch(e){ res.checks.contribHandleEscaped=false; res.checks.xssThrew=String(e&&e.message||e); }
     res.errors=errors.slice();
     res.ok = res.checks.foldEqualsModel && res.checks.fullRevealModel && res.checks.fullRevealFold
       && res.checks.grassColorLive
@@ -1756,6 +1773,7 @@ if(SELFTEST){ (async()=>{
       && res.checks.shareHeroFraming
       && res.checks.mapLayoutSection && res.checks.mapLayoutHasInput && res.checks.mapLayoutHasButton
       && res.checks.mapLayoutSanitizes && res.checks.mapLayoutTargetsRefound && res.checks.mapLayoutClickCycle
+      && res.checks.contribHandleEscaped
       && errors.length===0;
     setMode("live");
     $("selftest").textContent="SELFTEST "+JSON.stringify(res);

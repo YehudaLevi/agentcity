@@ -83,7 +83,13 @@ export function createFederator(opts: FederatorOpts): Federator {
       if (!events.length) return; // nothing to send and not time for a resync
       const maxTs = events.reduce((m, e) => (e.ts > m ? e.ts : m), cursor.ts);
 
-      const batch: GamifiedBatch = { v: 1, handle: opts.handle, events };
+      // Privacy: the hub only needs DAY-level ordering (store sorts by day, ts,
+      // factKey; renderCity slots by dateKey(ts)). Truncate the wire ts to the
+      // calendar day so second-granularity "when exactly you worked" never leaves
+      // the machine. The watermark (maxTs, above) keeps full precision locally so
+      // resume stays exact. dayKey(ts) stays a parseable date coerce() accepts.
+      const wireEvents = events.map((e) => ({ ...e, ts: dayKey(e.ts) }));
+      const batch: GamifiedBatch = { v: 1, handle: opts.handle, events: wireEvents };
       try {
         const res = await doFetch(url, {
           method: "POST",

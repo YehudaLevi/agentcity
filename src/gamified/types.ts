@@ -80,12 +80,42 @@ const CATEGORIES: ReadonlySet<Category> = new Set<Category>([
   "planning",
 ]);
 
+// --- wire sanitization (server-side firewall) -------------------------------
+// coerce() is the trust boundary: the client-side cleanHandle (src/founding.ts)
+// is bypassable by a raw POST to /ingest, so every contributor-controlled string
+// that can reach the shared renderer's DOM is sanitized HERE, not just at the
+// renderer. `by` is the primary stored-XSS vector (it lands in tooltip credit).
+
+/** A handle token — the SAME charset/length as founding.ts cleanHandle. `by`
+ * namespaces per-user tiles and is shown in the shared scene; a raw handle would
+ * be a stored-XSS vector. "" when nothing usable survives (caller rejects). */
+function cleanHandle(raw: string): string {
+  return raw.trim().replace(/\s+/g, "-").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 32);
+}
+
+/** Strip HTML-meta and control characters from a wire display/identifier string
+ * and cap its length. Defense-in-depth for strings (name, remote, token) that
+ * can reach the DOM; keeps normal path/URL characters (/ : . @ -) intact. */
+function cleanText(raw: string, max: number): string {
+  // eslint-disable-next-line no-control-regex
+  return raw.replace(/[\u0000-\u001f<>&"'`]/g, "").slice(0, max);
+}
+
 function coerceProj(input: unknown): ProjectId | null {
   if (!input || typeof input !== "object") return null;
   const o = input as Record<string, unknown>;
-  if (o.kind === "git" && typeof o.remote === "string" && o.remote) return { kind: "git", remote: o.remote };
-  if (o.kind === "repo" && typeof o.token === "string" && o.token) return { kind: "repo", token: o.token };
-  if (o.kind === "local" && typeof o.token === "string" && o.token) return { kind: "local", token: o.token };
+  if (o.kind === "git" && typeof o.remote === "string") {
+    const remote = cleanText(o.remote, 200);
+    if (remote) return { kind: "git", remote };
+  }
+  if (o.kind === "repo" && typeof o.token === "string") {
+    const token = cleanText(o.token, 128);
+    if (token) return { kind: "repo", token };
+  }
+  if (o.kind === "local" && typeof o.token === "string") {
+    const token = cleanText(o.token, 128);
+    if (token) return { kind: "local", token };
+  }
   return null;
 }
 
@@ -96,8 +126,14 @@ export function coerce(input: unknown): GamifiedEvent | null {
   if (o.v !== 1) return null;
   const proj = coerceProj(o.proj);
   if (!proj) return null;
-  if (typeof o.by !== "string" || !o.by) return null;
+  // `by` is the primary stored-XSS vector — it becomes tooltip credit in the
+  // shared renderer. Sanitize to the cleanHandle charset; reject if nothing
+  // usable survives (a purely-hostile handle is not a valid contributor).
+  if (typeof o.by !== "string") return null;
+  const by = cleanHandle(o.by);
+  if (!by) return null;
   if (typeof o.name !== "string") return null;
+  const name = cleanText(o.name, 64); // display basename; strip HTML-meta, cap length
   if (typeof o.day !== "number" || !Number.isFinite(o.day)) return null;
   // ts must be a PARSEABLE timestamp — a blank/garbage ts would poison the shared
   // epoch (min ts) and collapse the whole city to NaN days. Fail early here.
@@ -109,8 +145,8 @@ export function coerce(input: unknown): GamifiedEvent | null {
   return {
     v: 1,
     proj,
-    name: o.name,
-    by: o.by,
+    name,
+    by,
     day: o.day,
     ts: o.ts,
     wu: o.wu,
@@ -134,12 +170,14 @@ export function coerceBatch(input: unknown): GamifiedBatch | null {
   if (!input || typeof input !== "object") return null;
   const o = input as Record<string, unknown>;
   if (o.v !== 1) return null;
-  if (typeof o.handle !== "string" || !o.handle) return null;
+  if (typeof o.handle !== "string") return null;
+  const handle = cleanHandle(o.handle); // same sanitization as the per-event `by`
+  if (!handle) return null;
   if (!Array.isArray(o.events)) return null;
   const events: GamifiedEvent[] = [];
   for (const raw of o.events) {
     const ev = coerce(raw);
     if (ev) events.push(ev);
   }
-  return { v: 1, handle: o.handle, events };
+  return { v: 1, handle, events };
 }

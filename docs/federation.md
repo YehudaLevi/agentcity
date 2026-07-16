@@ -59,9 +59,22 @@ interface GamifiedEvent {
 interface GamifiedBatch { v: 1; handle: string; events: GamifiedEvent[] }  // POST /ingest body
 ```
 
-`coerce()` / `coerceBatch()` validate the wire at runtime with **zero deps**. Facts are
-keyed by `(project, contributor, day)` (`factKey`); a re-sent open day **upserts** (gamify
-re-aggregates a growing day to a higher WU — last wins), so at-least-once delivery and
+`coerce()` / `coerceBatch()` validate **and sanitize** the wire at runtime with **zero
+deps** — they are the server-side trust boundary, not just a shape check. Every
+contributor-controlled string that can reach the shared renderer's DOM is scrubbed here
+(the client-side handle cleaner is bypassable by a raw POST): `by` and the batch `handle`
+are reduced to the handle charset (`[A-Za-z0-9._-]`, ≤32; empty ⇒ event/batch rejected),
+`name`/`remote`/`token` are stripped of control and HTML-meta characters and length-capped,
+and `category` must be one of the known enum. The renderer additionally HTML-escapes handles
+before display (defense-in-depth against stored XSS).
+
+**`ts` is day-granular on the wire** (`YYYY-MM-DD`). The hub only needs day-level ordering
+(the store sorts by `day, ts, factKey`; `renderCity` slots by `dateKey(ts)`), so the client
+truncates to the calendar day before sending — second-granularity "when exactly you worked"
+never leaves the machine. The local push watermark keeps full precision so resume stays exact.
+
+Facts are keyed by `(project, contributor, day)` (`factKey`); a re-sent open day **upserts**
+(gamify re-aggregates a growing day to a higher WU — last wins), so at-least-once delivery and
 out-of-order arrival are idempotent. No double-counting.
 
 ## Reconciliation (`src/gamified/city.ts`)
@@ -92,8 +105,25 @@ Config (`~/.agentcity/config.json`, additive/optional):
 ```json
 { "federation": { "role": "client", "centralUrl": "http://hub:4243", "handle": "alice" } }
 ```
-`--federate <url>` overrides `centralUrl`. Absent handle → an anonymous `anon-<hash>`. The
-watermark persists to `~/.agentcity/federation.json`.
+`--federate <url>` overrides `centralUrl`.
+
+> **N1 — config-armed outbound.** Setting `federation.centralUrl` in `config.json` **arms the
+> outbound push on its own** — no `--federate` flag required. The server federates whenever a
+> `centralUrl` is present and `role` is not `"central"` (`bin/agentcity.ts` `setupFederation`).
+> This is the one sanctioned exception to rule 3 ("nothing outbound, ever"); it is opt-in, but
+> the opt-in can live entirely in config.
+
+**Identity default.** Absent an explicit handle, the contributor `by`/`handle` defaults to
+**`$USER`** (then `$LOGNAME`, else `"user"`) — see `localHandle` in `src/founding.ts`.
+Precedence: `--handle` > `config.federation.handle` > `$USER`. There is **no** anonymous
+`anon-<hash>` default.
+
+> **Privacy note.** Because the handle defaults to your OS username, enabling federation
+> publishes that username (and your git remotes in clear) to the hub and every viewer of the
+> shared scene. For anonymity, set an explicit `--handle` / `federation.handle` before
+> federating.
+
+The watermark persists to `~/.agentcity/federation.json`.
 
 ## Hub (`--central`)
 

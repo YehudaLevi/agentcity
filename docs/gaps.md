@@ -85,6 +85,14 @@ web/city.html — see §8 process note)
 
 ## 4. Engine queue (P2)
 
+- **Secondary-category regression** (from the federation review): the gamified
+  pipeline carries a SINGLE `category` per (project, day) — `GamifiedEvent` has
+  no secondary field, and `renderCity` sets `secondary: null` for every activity
+  (`src/compiler.ts`). The old raw-event pipeline surfaced a secondary category
+  ("code+tests" atriums in the renderer); that signal is currently LOST end to
+  end. The renderer/tooltip still reads `o.secondary` but never receives one.
+  Restoring it means threading a secondary category through gamify → the wire →
+  renderCity. Future work — NOT fixed in the review wave.
 - **Repo ignore-list**: config.json `ignore:[...]` + default junk list
   (bash-*, docker, k8s, home-dir names). User has junk-dir tents on the map.
 - **Every biome gets water**: hills got a dry map (user wanted water; solved

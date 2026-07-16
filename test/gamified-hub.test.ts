@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createHub } from "../src/gamified/hub.js";
 import { renderCity } from "../src/compiler.js";
 import { compileRules } from "../src/federation/mapping.js";
+import { coerceBatch } from "../src/gamified/types.js";
 import { stableStringify } from "../src/types.js";
 import type { GamifiedEvent, GamifiedBatch, ProjectId } from "../src/gamified/types.js";
 
@@ -54,6 +55,28 @@ describe("central hub (shared GamifiedCity)", () => {
     expect(hub.cityAt(2).day).toBe(2);
     // exact-duplicate batch -> store unchanged -> null
     expect(hub.ingest(batch("alice", [ev({ proj: git("app"), by: "alice", day: 0, founding: true })]))).toBeNull();
+  });
+
+  it("XSS firewall: a malicious `by` from a raw /ingest POST never reaches a client un-sanitized", () => {
+    const hub = createHub({ seed: "hub" });
+    // Simulate the exact server path: an attacker POSTs a raw body (bypassing the
+    // client-side handle cleaner) -> coerceBatch validates+sanitizes -> hub.ingest.
+    const rawPost = {
+      v: 1,
+      handle: "<script>steal()</script>",
+      events: [{ ...ev({ proj: git("app"), by: "x", day: 0 }), by: "<img src=x onerror=alert(1)>" }],
+    };
+    const batch = coerceBatch(rawPost)!;
+    expect(batch).not.toBeNull();
+    hub.ingest(batch);
+
+    // What a client actually receives is hub.model() (and its delta timeline).
+    const contributors = hub.model().lots.flatMap((l) => l.contributors ?? []);
+    expect(contributors.length).toBeGreaterThan(0);
+    for (const c of contributors) expect(c).not.toMatch(/[<>&"'`]/); // no HTML-meta reaches the DOM
+    const wire = stableStringify(hub.model());
+    expect(wire).not.toContain("<img");
+    expect(wire).not.toContain("<script");
   });
 
   it("mapping rules alias different remotes into one shared building", () => {
