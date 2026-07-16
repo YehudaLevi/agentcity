@@ -1,0 +1,37 @@
+name: publish
+
+# Publishes to npm via the Trusted Publisher (OIDC) link configured on npmjs.com —
+# no tokens, no OTP. Triggered by pushing a version tag (what `npm version` creates).
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+      # trusted publishing needs a recent npm CLI (newer than some node bundles)
+      - run: npm install -g npm@latest
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+      # prepack runs the build; OIDC exchange happens automatically (trusted publisher)
+      - run: npm publish
