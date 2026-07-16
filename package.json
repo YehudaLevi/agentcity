@@ -47,9 +47,9 @@
     "dev": "node -e \"const{mkdtempSync}=require('node:fs');const{tmpdir}=require('node:os');const{join}=require('node:path');const{spawn}=require('node:child_process');const d=mkdtempSync(join(tmpdir(),'agentcity-dev-'));console.log('agentcity dev root:',d);spawn(process.execPath,[join('bin','agentcity.js'),'--root',d,'--history',join('test','fixtures','claude-history'),'--pixelagents',join('test','fixtures','pixelagents')],{stdio:'inherit'});\""
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^26.1.1",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0",
-    "vitest": "^3.0.0"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   }
 }
