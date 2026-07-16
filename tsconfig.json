@@ -15,5 +15,7 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "bin/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "bin/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  // Bun-only compile entry: uses a `.ts` import specifier Bun resolves but tsc rejects.
+  "exclude": ["bin/agentcity.bun.ts"]
 }

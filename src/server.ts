@@ -129,6 +129,11 @@ export interface AgentcityServer {
 // (npm install: .../dist/src/server.js). web/ is never compiled and always
 // sits at <package root>/web, so the "up" count from here differs. Probe both.
 function defaultWebRoot(): string {
+  // Explicit override — the only way to locate web/ in a `bun build --compile`
+  // binary, whose import.meta.url is a virtual path (see Dockerfile). Inert for
+  // node/bun-from-source: unset, or set to a dir without city.html, falls through.
+  const env = process.env.AGENTCITY_WEB_DIR;
+  if (env && existsSync(join(env, "city.html"))) return env;
   const here = dirname(fileURLToPath(import.meta.url));
   const devPath = join(here, "..", "web"); // src/ -> root/web
   if (existsSync(join(devPath, "city.html"))) return devPath;
