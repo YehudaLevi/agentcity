@@ -1,6 +1,6 @@
 {
   "name": "agentcity",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "Your work builds a city. Your agent is the architect. A persistent, local-first pixel city compiled from your AI-coding-agent activity.",
   "license": "MIT",
   "author": "Yehuda Levi",
