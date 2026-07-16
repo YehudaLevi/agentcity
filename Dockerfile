@@ -19,7 +19,7 @@ RUN bun build ./bin/agentcity.bun.ts --compile --minify --outfile /out/agentcity
 
 # ---- dev stage: node runs raw TypeScript for local iteration (no dist/) ----
 # The bin shim finds no dist/ and registers tsx to run bin/agentcity.ts from source.
-FROM node:22-alpine AS dev
+FROM node:26-alpine AS dev
 WORKDIR /app
 ENV NODE_ENV=development
 COPY package.json package-lock.json ./
