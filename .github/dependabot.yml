@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # Bump the SHA-pinned action versions (reads the trailing `# vX.Y.Z` comment).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Dockerfile base images (node, oven/bun, distroless).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # devDependencies (typescript, tsx, vitest).
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        patterns: ["*"]
